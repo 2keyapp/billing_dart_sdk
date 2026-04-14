@@ -11,6 +11,18 @@ import 'package:billing_flutter_sdk/src/verification/token_verifier.dart';
 
 /// Billing Flutter SDK: init from saved token, sync from server, paste+verify.
 ///
+/// **HTTP routes used today**
+/// - [syncFromServer] → `GET /api/billing/license` (Bearer + optional
+///   `X-Paying-Party-Id`). Other routes (subscriptions, seats, etc.) are not
+///   wrapped here yet; call the Billing API directly if needed.
+///
+/// **Auth:** Pass the same **AuthAPI** access token the app uses elsewhere (audience
+/// must include Billing). Do not send raw IdP tokens to Billing.
+///
+/// **License JWT:** [configure] supplies a PEM to verify the signed license JWT
+/// offline; that is separate from API authentication (no Billing verification
+/// keys are embedded for HTTP auth).
+///
 /// Call [configure] before first use (at least [publicKeyPem] from Billing API).
 /// Then [init] on app start with saved token, and use [getPayload] for add-on checks.
 class BillingSdk {
@@ -43,7 +55,10 @@ class BillingSdk {
 
   /// Configures the SDK. Call before [init], [syncFromServer], or [verifyAndDecode].
   ///
-  /// [billingApiBaseUrl] – base URL for sync (e.g. `https://billing.example.com`).
+  /// [billingApiBaseUrl] – Billing **origin** for HTTP calls, e.g.
+  /// `https://billing.example.com`. Paths use the `/api/billing` prefix
+  /// internally. You may also pass `https://billing.example.com/api/billing`;
+  /// it is normalized to the same origin.
   /// [publicKeyPem] – PEM string to verify JWTs; if null, uses embedded default
   /// (replace with key from Billing API in production).
   /// [publicKeyPath] – path to a .pem file; file content is read and validated for
@@ -81,6 +96,8 @@ class BillingSdk {
 
   /// Configures the SDK using a public key loaded from a Flutter asset.
   /// The key is embedded at build time. Validates PEM boundaries before use.
+  ///
+  /// [billingApiBaseUrl] — same as [configure] (Billing origin or `.../api/billing`).
   ///
   /// Add the .pem file to your `pubspec.yaml` under `flutter: assets:` (e.g. `keys/billing_public.pem`).
   static Future<void> configureWithAsset({
@@ -170,13 +187,24 @@ class BillingSdk {
   /// Returns the current in-memory payload, or null if not initialized or invalid.
   static BillingTokenPayload? getPayload() => _currentPayload;
 
-  /// Syncs from the Billing API. Requires [authorizationToken] (Bearer or SSO token). No email/ssoId.
-  /// GET /api/billing/license with Authorization header. On success, updates in-memory state.
-  /// Returns [SyncResult]; on failure, use the message for an error notification.
-  static Future<SyncResult> syncFromServer({required String authorizationToken}) async {
+  /// Syncs from the Billing API: `GET /api/billing/license`.
+  ///
+  /// [authorizationToken] — AuthAPI access token (Bearer added if missing).
+  /// [payingPartyId] — optional `paying_parties.id` as a string for
+  /// `X-Paying-Party-Id` when the user acts for another payer; omit for default.
+  ///
+  /// On success, updates in-memory state. Returns [SyncResult]; on failure,
+  /// show [SyncFailure.message] to the user (handles 401/403/404 with distinct copy).
+  static Future<SyncResult> syncFromServer({
+    required String authorizationToken,
+    String? payingPartyId,
+  }) async {
     BillingSdkLogger.info('syncFromServer: requesting license from API');
     final client = _apiClientOrThrow;
-    final result = await client.fetchLicense(authorizationToken: authorizationToken);
+    final result = await client.fetchLicense(
+      authorizationToken: authorizationToken,
+      payingPartyId: payingPartyId,
+    );
 
     switch (result) {
       case SyncSuccess(:final signedToken):

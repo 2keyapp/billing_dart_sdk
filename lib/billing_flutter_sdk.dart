@@ -9,7 +9,7 @@
 library;
 
 export 'package:billing_flutter_sdk/src/api/billing_api_client.dart'
-    show SyncResult, SyncSuccess, SyncFailure;
+    show SyncResult, SyncSuccess, SyncFailure, normalizeBillingApiBaseUrl;
 export 'package:billing_flutter_sdk/src/billing_sdk.dart';
 export 'package:billing_flutter_sdk/src/models/billing_subscription.dart';
 export 'package:billing_flutter_sdk/src/models/billing_token_error.dart';

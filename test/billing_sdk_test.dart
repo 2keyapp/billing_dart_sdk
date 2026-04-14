@@ -128,5 +128,32 @@ void main() {
         expect((result as SyncFailure).message, contains('token'));
       });
     });
+
+    group('normalizeBillingApiBaseUrl', () {
+      test('strips trailing slashes', () {
+        expect(
+          normalizeBillingApiBaseUrl('https://billing.example.com///'),
+          'https://billing.example.com',
+        );
+      });
+
+      test('strips /api/billing suffix', () {
+        expect(
+          normalizeBillingApiBaseUrl('https://billing.example.com/api/billing'),
+          'https://billing.example.com',
+        );
+        expect(
+          normalizeBillingApiBaseUrl('https://billing.example.com/api/billing/'),
+          'https://billing.example.com',
+        );
+      });
+
+      test('leaves origin unchanged when no suffix', () {
+        expect(
+          normalizeBillingApiBaseUrl('https://billing.example.com'),
+          'https://billing.example.com',
+        );
+      });
+    });
   });
 }

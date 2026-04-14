@@ -17,17 +17,54 @@ class SyncFailure implements SyncResult {
   final String message;
 }
 
+/// Strips trailing slashes and, if present, a trailing `/api/billing` segment so
+/// callers may pass either the Billing host (`https://billing.example.com`) or
+/// the full API base (`https://billing.example.com/api/billing`).
+String normalizeBillingApiBaseUrl(String input) {
+  var s = input.trim();
+  while (s.endsWith('/')) {
+    s = s.substring(0, s.length - 1);
+  }
+  const suffix = '/api/billing';
+  if (s.toLowerCase().endsWith(suffix)) {
+    s = s.substring(0, s.length - suffix.length);
+    while (s.endsWith('/')) {
+      s = s.substring(0, s.length - 1);
+    }
+  }
+  return s;
+}
+
 /// HTTP client for the Billing API (sync and optional public-key fetch).
 class BillingApiClient {
   BillingApiClient({required String baseUrl})
-    : _baseUrl = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
+    : _baseUrl = _originWithTrailingSlash(normalizeBillingApiBaseUrl(baseUrl));
 
   final String _baseUrl;
 
-  /// GET /api/billing/license with Authorization header.
-  /// [authorizationToken] is required (Bearer or SSO token). No query params.
-  /// Response: map with key `signedToken` (JWT string), possibly under `data`. Returns [SyncSuccess] or [SyncFailure].
-  Future<SyncResult> fetchLicense({required String authorizationToken}) async {
+  static String _originWithTrailingSlash(String origin) {
+    if (origin.isEmpty) return origin;
+    return origin.endsWith('/') ? origin : '$origin/';
+  }
+
+  /// GET `{origin}/api/billing/license` with `Authorization: Bearer <token>`.
+  ///
+  /// [authorizationToken] must be an **AuthAPI** access token (audience must
+  /// include Billing). Do not send raw IdP (e.g. Google) tokens.
+  ///
+  /// When [payingPartyId] is non-null and non-empty, sends
+  /// `X-Paying-Party-Id` for multi-org / seat-holder context. Omit or pass null
+  /// for the default payer.
+  ///
+  /// **HTTP errors:** [SyncFailure.message] is suitable to show the user.
+  /// **401** — missing/expired/invalid token; **403** — not allowed for this
+  /// route or [payingPartyId]; **404** — no billing account (when applicable).
+  ///
+  /// Response body: map with `signedToken` (JWT string), possibly under `data`.
+  Future<SyncResult> fetchLicense({
+    required String authorizationToken,
+    String? payingPartyId,
+  }) async {
     final raw = authorizationToken.trim();
     if (raw.isEmpty) {
       BillingSdkLogger.warning('fetchLicense: authorization token empty');
@@ -36,6 +73,10 @@ class BillingApiClient {
     final token = raw.toLowerCase().startsWith('bearer ') ? raw : 'Bearer $raw';
     final uri = Uri.parse('${_baseUrl}api/billing/license');
     final headers = <String, String>{'Authorization': token};
+    final party = payingPartyId?.trim();
+    if (party != null && party.isNotEmpty) {
+      headers['X-Paying-Party-Id'] = party;
+    }
 
     BillingSdkLogger.info('fetchLicense: GET', uri.toString());
 
@@ -69,6 +110,14 @@ class BillingApiClient {
         BillingSdkLogger.error('fetchLicense: 401 Unauthorized');
         return const SyncFailure(
           message: 'Session expired or invalid. Please sign in again.',
+        );
+      }
+
+      if (response.statusCode == 403) {
+        BillingSdkLogger.error('fetchLicense: 403 Forbidden');
+        return const SyncFailure(
+          message:
+              'You do not have access to this billing action. Try another organization or contact your administrator.',
         );
       }
 
