@@ -5,12 +5,23 @@
 /// 2. On app start, call [BillingSdk.init] with the saved token from storage.
 /// 3. Use [BillingSdk.getPayload] for add-on checks.
 /// 4. For "Sync billing" button: [BillingSdk.syncFromServer].
-/// 5. For paste flow: [BillingSdk.verifyAndDecode]; show [BillingTokenError.message] on failure.
+/// 5. For evaluation-aware add-on UX, use [BillingSdk.getAddonEntitlement],
+///    [BillingSdk.startAddonEvaluation], [BillingSdk.createAddonPurchaseSession],
+///    and [BillingSdk.checkAddonAccess].
+/// 6. For paste flow: [BillingSdk.verifyAndDecode]; show [BillingTokenError.message] on failure.
 library;
 
 export 'package:billing_flutter_sdk/src/api/billing_api_client.dart'
-    show SyncResult, SyncSuccess, SyncFailure, normalizeBillingApiBaseUrl;
+    show
+        SyncResult,
+        SyncSuccess,
+        SyncFailure,
+        BillingApiResult,
+        BillingApiSuccess,
+        BillingApiFailure,
+        normalizeBillingApiBaseUrl;
 export 'package:billing_flutter_sdk/src/billing_sdk.dart';
+export 'package:billing_flutter_sdk/src/models/addon_entitlement.dart';
 export 'package:billing_flutter_sdk/src/models/billing_subscription.dart';
 export 'package:billing_flutter_sdk/src/models/billing_token_error.dart';
 export 'package:billing_flutter_sdk/src/models/billing_token_payload.dart';

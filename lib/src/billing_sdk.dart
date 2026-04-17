@@ -5,6 +5,7 @@ import 'package:billing_flutter_sdk/src/keys/default_public_key.dart';
 import 'package:billing_flutter_sdk/src/keys/public_key_loader.dart';
 import 'package:billing_flutter_sdk/src/keys/public_key_loader_asset.dart';
 import 'package:billing_flutter_sdk/src/logging/sdk_logger.dart';
+import 'package:billing_flutter_sdk/src/models/addon_entitlement.dart';
 import 'package:billing_flutter_sdk/src/models/billing_token_error.dart';
 import 'package:billing_flutter_sdk/src/models/billing_token_payload.dart';
 import 'package:billing_flutter_sdk/src/verification/token_verifier.dart';
@@ -13,8 +14,11 @@ import 'package:billing_flutter_sdk/src/verification/token_verifier.dart';
 ///
 /// **HTTP routes used today**
 /// - [syncFromServer] → `GET /api/billing/license` (Bearer + optional
-///   `X-Paying-Party-Id`). Other routes (subscriptions, seats, etc.) are not
-///   wrapped here yet; call the Billing API directly if needed.
+///   `X-Paying-Party-Id`)
+/// - [getAddonEntitlement] → `GET /api/billing/addons/:planId/entitlement`
+/// - [startAddonEvaluation] → `POST /api/billing/addons/:planId/start`
+/// - [createAddonPurchaseSession] → `POST /api/billing/addons/:planId/purchase-session`
+/// - [checkAddonAccess] → `GET /api/billing/addons/:planId/access`
 ///
 /// **Auth:** Pass the same **AuthAPI** access token the app uses elsewhere (audience
 /// must include Billing). Do not send raw IdP tokens to Billing.
@@ -49,7 +53,9 @@ class BillingSdk {
     final start = pem.indexOf(begin);
     final endIdx = pem.indexOf(end);
     if (start < 0 || endIdx <= start) return '?';
-    final body = pem.substring(start + begin.length, endIdx).replaceAll(RegExp(r'\s'), '');
+    final body = pem
+        .substring(start + begin.length, endIdx)
+        .replaceAll(RegExp(r'\s'), '');
     return body.length >= 24 ? body.substring(body.length - 24) : body;
   }
 
@@ -78,14 +84,23 @@ class BillingSdk {
       try {
         _publicKeyPem = loadPublicKeyFromPath(publicKeyPath.trim());
         _loadedKeyFingerprint = _pemFingerprint(_publicKeyPem!);
-        BillingSdkLogger.info('Configured: public key from path', '${publicKeyPath.trim()} — fingerprint: $_loadedKeyFingerprint');
+        BillingSdkLogger.info(
+          'Configured: public key from path',
+          '${publicKeyPath.trim()} — fingerprint: $_loadedKeyFingerprint',
+        );
       } catch (e) {
-        BillingSdkLogger.error('Configure: failed to load public key from path', '$publicKeyPath — $e');
+        BillingSdkLogger.error(
+          'Configure: failed to load public key from path',
+          '$publicKeyPath — $e',
+        );
         rethrow;
       }
     } else if (publicKeyPem != null) {
       _loadedKeyFingerprint = _pemFingerprint(publicKeyPem);
-      BillingSdkLogger.info('Configured: public key set from PEM (${publicKeyPem.length} chars)', _loadedKeyFingerprint);
+      BillingSdkLogger.info(
+        'Configured: public key set from PEM (${publicKeyPem.length} chars)',
+        _loadedKeyFingerprint,
+      );
     }
     if (billingApiBaseUrl != null) {
       BillingSdkLogger.info('Configured: billingApiBaseUrl', billingApiBaseUrl);
@@ -108,9 +123,15 @@ class BillingSdk {
       final pem = await loadPublicKeyFromAsset(publicKeyAsset);
       _loadedKeyFingerprint = _pemFingerprint(pem);
       configure(billingApiBaseUrl: billingApiBaseUrl, publicKeyPem: pem);
-      BillingSdkLogger.info('Configured with asset: public key loaded', '$publicKeyAsset — fingerprint: $_loadedKeyFingerprint');
+      BillingSdkLogger.info(
+        'Configured with asset: public key loaded',
+        '$publicKeyAsset — fingerprint: $_loadedKeyFingerprint',
+      );
     } catch (e) {
-      BillingSdkLogger.error('configureWithAsset failed', '$publicKeyAsset — $e');
+      BillingSdkLogger.error(
+        'configureWithAsset failed',
+        '$publicKeyAsset — $e',
+      );
       rethrow;
     }
   }
@@ -134,7 +155,11 @@ class BillingSdk {
       if (parts.length < 2) return null;
       final raw = parts[0].replaceAll('-', '+').replaceAll('_', '/');
       final pad = raw.length % 4;
-      final padded = pad == 2 ? '$raw==' : pad == 3 ? '$raw=' : raw;
+      final padded = pad == 2
+          ? '$raw=='
+          : pad == 3
+          ? '$raw='
+          : raw;
       final decoded = utf8.decode(base64Url.decode(padded));
       final map = jsonDecode(decoded) as Map<String, dynamic>?;
       return map?['alg'] as String?;
@@ -180,12 +205,88 @@ class BillingSdk {
         );
       case VerifyFailure(:final error):
         _currentPayload = null;
-        BillingSdkLogger.error('init: token invalid', 'reason=${error.reason} — ${error.message}');
+        BillingSdkLogger.error(
+          'init: token invalid',
+          'reason=${error.reason} — ${error.message}',
+        );
     }
   }
 
   /// Returns the current in-memory payload, or null if not initialized or invalid.
   static BillingTokenPayload? getPayload() => _currentPayload;
+
+  /// Fetches the authoritative add-on entitlement state for [planId].
+  ///
+  /// Use this as the main source for evaluation banners, remaining-days copy,
+  /// and purchase/evaluation CTA decisions.
+  static Future<BillingApiResult<AddonEntitlement>> getAddonEntitlement({
+    required String authorizationToken,
+    required String planId,
+    String? payingPartyId,
+  }) {
+    BillingSdkLogger.info(
+      'getAddonEntitlement: requesting entitlement',
+      planId,
+    );
+    return _apiClientOrThrow.fetchAddonEntitlement(
+      authorizationToken: authorizationToken,
+      planId: planId,
+      payingPartyId: payingPartyId,
+    );
+  }
+
+  /// Starts the evaluation explicitly for [planId].
+  ///
+  /// This is intended for product surfaces that expose a
+  /// "Start 30-day evaluation" action. The backend remains the source of truth.
+  static Future<BillingApiResult<AddonEntitlement>> startAddonEvaluation({
+    required String authorizationToken,
+    required String planId,
+    String? payingPartyId,
+  }) {
+    BillingSdkLogger.info('startAddonEvaluation: starting evaluation', planId);
+    return _apiClientOrThrow.startAddonEvaluation(
+      authorizationToken: authorizationToken,
+      planId: planId,
+      payingPartyId: payingPartyId,
+    );
+  }
+
+  /// Creates a checkout session for purchasing the add-on [planId].
+  static Future<BillingApiResult<AddonPurchaseSession>>
+  createAddonPurchaseSession({
+    required String authorizationToken,
+    required String planId,
+    required String successUrl,
+    required String cancelUrl,
+    String? payingPartyId,
+  }) {
+    BillingSdkLogger.info(
+      'createAddonPurchaseSession: creating session',
+      planId,
+    );
+    return _apiClientOrThrow.createAddonPurchaseSession(
+      authorizationToken: authorizationToken,
+      planId: planId,
+      successUrl: successUrl,
+      cancelUrl: cancelUrl,
+      payingPartyId: payingPartyId,
+    );
+  }
+
+  /// Lightweight access check for a single add-on [planId].
+  static Future<BillingApiResult<AddonAccess>> checkAddonAccess({
+    required String authorizationToken,
+    required String planId,
+    String? payingPartyId,
+  }) {
+    BillingSdkLogger.info('checkAddonAccess: checking access', planId);
+    return _apiClientOrThrow.checkAddonAccess(
+      authorizationToken: authorizationToken,
+      planId: planId,
+      payingPartyId: payingPartyId,
+    );
+  }
 
   /// Syncs from the Billing API: `GET /api/billing/license`.
   ///
@@ -218,7 +319,10 @@ class BillingSdk {
             );
             return result;
           case VerifyFailure(:final error):
-            BillingSdkLogger.error('syncFromServer: token from API failed verification', 'reason=${error.reason}');
+            BillingSdkLogger.error(
+              'syncFromServer: token from API failed verification',
+              'reason=${error.reason}',
+            );
             return SyncFailure(message: error.message);
         }
       case SyncFailure(:final message):
@@ -240,7 +344,10 @@ class BillingSdk {
           'verifyAndDecode: success — payingParty=${payload.payingParty.id}, subscriptions=${payload.subscriptionIds.length}',
         );
       case VerifyFailure(:final error):
-        BillingSdkLogger.error('verifyAndDecode: failed', 'reason=${error.reason} — ${error.message}');
+        BillingSdkLogger.error(
+          'verifyAndDecode: failed',
+          'reason=${error.reason} — ${error.message}',
+        );
     }
 
     return result;
