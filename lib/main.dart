@@ -35,24 +35,13 @@ class _BillingExamplePageState extends State<BillingExamplePage> {
   final TextEditingController _authTokenController = TextEditingController();
   final TextEditingController _payingPartyIdController =
       TextEditingController();
-  final TextEditingController _addonPlanIdController = TextEditingController();
-  final TextEditingController _successUrlController = TextEditingController(
-    text: 'http://localhost:3000/success',
-  );
-  final TextEditingController _cancelUrlController = TextEditingController(
-    text: 'http://localhost:3000/cancel',
-  );
   final TextEditingController _publicKeyPathController =
       TextEditingController();
   final TextEditingController _billingBaseUrlController = TextEditingController(
     text: _defaultBillingBaseUrl,
   );
   bool _syncing = false;
-  bool _addonLoading = false;
   String? _savedToken;
-  AddonEntitlement? _addonEntitlement;
-  AddonAccess? _addonAccess;
-  AddonPurchaseSession? _addonPurchaseSession;
   static const _defaultBillingBaseUrl = 'http://localhost:3000';
 
   /// Public key PEM asset. Must match the key that signed the JWT from your backend.
@@ -219,130 +208,6 @@ class _BillingExamplePageState extends State<BillingExamplePage> {
     }
   }
 
-  String? _currentPayingPartyId() {
-    final payingPartyId = _payingPartyIdController.text.trim();
-    return payingPartyId.isEmpty ? null : payingPartyId;
-  }
-
-  String? _requireAddonInputs() {
-    final authToken = _authTokenController.text.trim();
-    if (authToken.isEmpty) {
-      return 'Authorization token is required.';
-    }
-    final planId = _addonPlanIdController.text.trim();
-    if (planId.isEmpty) {
-      return 'Add-on plan id is required.';
-    }
-    return null;
-  }
-
-  void _configureBaseUrlForExample() {
-    final baseUrl = _billingBaseUrlController.text.trim().isEmpty
-        ? _defaultBillingBaseUrl
-        : _billingBaseUrlController.text.trim();
-    BillingSdk.configure(billingApiBaseUrl: baseUrl);
-  }
-
-  Future<void> _runAddonAction(
-    Future<void> Function(String authToken, String planId) action,
-  ) async {
-    final error = _requireAddonInputs();
-    if (error != null) {
-      _showError(error);
-      return;
-    }
-    _configureBaseUrlForExample();
-    final authToken = _authTokenController.text.trim();
-    final planId = _addonPlanIdController.text.trim();
-    setState(() => _addonLoading = true);
-    try {
-      await action(authToken, planId);
-    } finally {
-      if (mounted) {
-        setState(() => _addonLoading = false);
-      }
-    }
-  }
-
-  Future<void> _onResolveEntitlement() async {
-    await _runAddonAction((authToken, planId) async {
-      final result = await BillingSdk.getAddonEntitlement(
-        authorizationToken: authToken,
-        planId: planId,
-        payingPartyId: _currentPayingPartyId(),
-      );
-      switch (result) {
-        case BillingApiSuccess<AddonEntitlement>(:final data):
-          setState(() {
-            _addonEntitlement = data;
-            _addonAccess = null;
-          });
-          _showSuccess(
-            'Entitlement loaded: ${addonEntitlementStatusName(data.status)}',
-          );
-        case BillingApiFailure<AddonEntitlement>(:final message):
-          _showError(message);
-      }
-    });
-  }
-
-  Future<void> _onStartEvaluation() async {
-    await _runAddonAction((authToken, planId) async {
-      final result = await BillingSdk.startAddonEvaluation(
-        authorizationToken: authToken,
-        planId: planId,
-        payingPartyId: _currentPayingPartyId(),
-      );
-      switch (result) {
-        case BillingApiSuccess<AddonEntitlement>(:final data):
-          setState(() => _addonEntitlement = data);
-          _showSuccess(
-            'Evaluation state: ${addonEntitlementStatusName(data.status)}',
-          );
-        case BillingApiFailure<AddonEntitlement>(:final message):
-          _showError(message);
-      }
-    });
-  }
-
-  Future<void> _onCheckAccess() async {
-    await _runAddonAction((authToken, planId) async {
-      final result = await BillingSdk.checkAddonAccess(
-        authorizationToken: authToken,
-        planId: planId,
-        payingPartyId: _currentPayingPartyId(),
-      );
-      switch (result) {
-        case BillingApiSuccess<AddonAccess>(:final data):
-          setState(() => _addonAccess = data);
-          _showSuccess('Access: ${data.allowed ? "allowed" : "denied"}');
-        case BillingApiFailure<AddonAccess>(:final message):
-          _showError(message);
-      }
-    });
-  }
-
-  Future<void> _onCreatePurchaseSession() async {
-    await _runAddonAction((authToken, planId) async {
-      final successUrl = _successUrlController.text.trim();
-      final cancelUrl = _cancelUrlController.text.trim();
-      final result = await BillingSdk.createAddonPurchaseSession(
-        authorizationToken: authToken,
-        planId: planId,
-        successUrl: successUrl,
-        cancelUrl: cancelUrl,
-        payingPartyId: _currentPayingPartyId(),
-      );
-      switch (result) {
-        case BillingApiSuccess<AddonPurchaseSession>(:final data):
-          setState(() => _addonPurchaseSession = data);
-          _showSuccess('Purchase session created.');
-        case BillingApiFailure<AddonPurchaseSession>(:final message):
-          _showError(message);
-      }
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     final payload = BillingSdk.getPayload();
@@ -464,151 +329,6 @@ class _BillingExamplePageState extends State<BillingExamplePage> {
                     )
                   : const Text('Sync billing'),
             ),
-            const SizedBox(height: 24),
-            Text(
-              'Evaluation flow',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Use the add-on endpoints to resolve entitlement, explicitly start evaluation, create a purchase session, and check access.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _addonPlanIdController,
-              decoration: const InputDecoration(
-                labelText: 'Add-on plan id',
-                hintText: 'e.g. 123',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _successUrlController,
-              decoration: const InputDecoration(
-                labelText: 'Success URL',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _cancelUrlController,
-              decoration: const InputDecoration(
-                labelText: 'Cancel URL',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                FilledButton(
-                  onPressed: _addonLoading ? null : _onResolveEntitlement,
-                  child: const Text('Resolve entitlement'),
-                ),
-                FilledButton.tonal(
-                  onPressed: _addonLoading ? null : _onStartEvaluation,
-                  child: const Text('Start evaluation'),
-                ),
-                FilledButton.tonal(
-                  onPressed: _addonLoading ? null : _onCheckAccess,
-                  child: const Text('Check access'),
-                ),
-                FilledButton.tonal(
-                  onPressed: _addonLoading ? null : _onCreatePurchaseSession,
-                  child: const Text('Create purchase session'),
-                ),
-              ],
-            ),
-            if (_addonLoading) ...[
-              const SizedBox(height: 8),
-              const LinearProgressIndicator(),
-            ],
-            if (_addonEntitlement != null) ...[
-              const SizedBox(height: 12),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Entitlement',
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Status: ${addonEntitlementStatusName(_addonEntitlement!.status)}',
-                      ),
-                      Text('Has access: ${_addonEntitlement!.hasAccess}'),
-                      Text('Days left: ${_addonEntitlement!.daysLeft}'),
-                      Text('Show banner: ${_addonEntitlement!.showBanner}'),
-                      Text(
-                        'Show purchase CTA: ${_addonEntitlement!.showPurchaseCta}',
-                      ),
-                      Text(
-                        'Show evaluation CTA: ${_addonEntitlement!.showEvaluationCta}',
-                      ),
-                      if (_addonEntitlement!.trialEndsAt != null)
-                        Text(
-                          'Trial ends: ${_addonEntitlement!.trialEndsAt!.toIso8601String()}',
-                        ),
-                      if (_addonEntitlement!.purchaseUrl != null)
-                        Text('Purchase URL: ${_addonEntitlement!.purchaseUrl}'),
-                      if (_addonEntitlement!.messageKey != null)
-                        Text('Message key: ${_addonEntitlement!.messageKey}'),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-            if (_addonAccess != null) ...[
-              const SizedBox(height: 12),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Access check',
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                      const SizedBox(height: 4),
-                      Text('Allowed: ${_addonAccess!.allowed}'),
-                      Text(
-                        'Status: ${addonEntitlementStatusName(_addonAccess!.status)}',
-                      ),
-                      if (_addonAccess!.daysLeft != null)
-                        Text('Days left: ${_addonAccess!.daysLeft}'),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-            if (_addonPurchaseSession != null) ...[
-              const SizedBox(height: 12),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Purchase session',
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                      const SizedBox(height: 4),
-                      SelectableText('URL: ${_addonPurchaseSession!.url}'),
-                      if (_addonPurchaseSession!.sessionId != null)
-                        Text('Session ID: ${_addonPurchaseSession!.sessionId}'),
-                    ],
-                  ),
-                ),
-              ),
-            ],
           ],
         ),
       ),
@@ -620,9 +340,6 @@ class _BillingExamplePageState extends State<BillingExamplePage> {
     _tokenController.dispose();
     _authTokenController.dispose();
     _payingPartyIdController.dispose();
-    _addonPlanIdController.dispose();
-    _successUrlController.dispose();
-    _cancelUrlController.dispose();
     _publicKeyPathController.dispose();
     _billingBaseUrlController.dispose();
     super.dispose();

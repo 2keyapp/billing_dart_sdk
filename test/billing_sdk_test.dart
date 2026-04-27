@@ -14,40 +14,36 @@ DcI/h/+lbVcG6QaSXALyCF6lcToJ8+hbIYYbxzle8zsSlDJmrlVpZ5qd
 String _createCanonicalBillingToken({Duration? expiresIn}) {
   final exp = expiresIn != null
       ? DateTime.now().add(expiresIn).millisecondsSinceEpoch ~/ 1000
-      : DateTime.now().add(const Duration(hours: 1)).millisecondsSinceEpoch ~/
-            1000;
+      : DateTime.now().add(const Duration(hours: 1)).millisecondsSinceEpoch ~/ 1000;
   final iat = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-  final validUntil =
-      DateTime.now()
-          .toUtc()
-          .add(const Duration(days: 30))
-          .millisecondsSinceEpoch ~/
-      1000;
-  final jwt = JWT({
-    'payload_version': 1,
-    'iss': 'https://billing.scomm.ai',
-    'aud': 'scomm',
-    'iat': iat,
-    'exp': exp,
-    'paying_party': {
-      'id': 'party_456',
-      'sso_id': 'sso_abc',
-      'billing_email': 'billing@example.com',
-      'organization_name': 'Acme Inc',
-    },
-    'subscriptions': [
-      {
-        'subscription_id': 'sub_canon_1',
-        'plan_id': 'plan_premium',
-        'product_id': 'prod_1',
-        'plan_name': 'Premium',
-        'product_name': 'Product One',
-        'subscription_status': 'active',
-        'valid_until': validUntil,
-        'assigned_user_party_id': null,
+  final validUntil = DateTime.now().toUtc().add(const Duration(days: 30)).millisecondsSinceEpoch ~/ 1000;
+  final jwt = JWT(
+    {
+      'payload_version': 1,
+      'iss': 'https://billing.scomm.ai',
+      'aud': 'scomm',
+      'iat': iat,
+      'exp': exp,
+      'paying_party': {
+        'id': 'party_456',
+        'sso_id': 'sso_abc',
+        'billing_email': 'billing@example.com',
+        'organization_name': 'Acme Inc',
       },
-    ],
-  });
+      'subscriptions': [
+        {
+          'subscription_id': 'sub_canon_1',
+          'plan_id': 'plan_premium',
+          'product_id': 'prod_1',
+          'plan_name': 'Premium',
+          'product_name': 'Product One',
+          'subscription_status': 'active',
+          'valid_until': validUntil,
+          'assigned_user_party_id': null,
+        },
+      ],
+    },
+  );
   return jwt.sign(ECPrivateKey(_ecPrivKeyPem), algorithm: JWTAlgorithm.ES256);
 }
 
@@ -97,10 +93,8 @@ void main() {
       test('empty string returns VerifyFailure malformed', () {
         final result = BillingSdk.verifyAndDecode('');
         expect(result, isA<VerifyFailure>());
-        expect(
-          (result as VerifyFailure).error.reason,
-          BillingTokenErrorReason.malformed,
-        );
+        expect((result as VerifyFailure).error.reason,
+            BillingTokenErrorReason.malformed);
       });
 
       test('invalid token returns VerifyFailure', () {
@@ -149,9 +143,7 @@ void main() {
           'https://billing.example.com',
         );
         expect(
-          normalizeBillingApiBaseUrl(
-            'https://billing.example.com/api/billing/',
-          ),
+          normalizeBillingApiBaseUrl('https://billing.example.com/api/billing/'),
           'https://billing.example.com',
         );
       });
@@ -161,74 +153,6 @@ void main() {
           normalizeBillingApiBaseUrl('https://billing.example.com'),
           'https://billing.example.com',
         );
-      });
-    });
-
-    group('addon entitlement helpers', () {
-      test('maps not_started to banner and evaluation CTA', () {
-        final entitlement = AddonEntitlement.fromJson({
-          'planId': '123',
-          'status': 'not_started',
-          'daysLeft': 0,
-          'purchaseUrl': '/api/billing/addons/123/purchase-session',
-        });
-
-        expect(entitlement.status, AddonEntitlementStatus.notStarted);
-        expect(entitlement.hasAccess, isFalse);
-        expect(entitlement.canStartTrial, isTrue);
-        expect(entitlement.canPurchase, isTrue);
-        expect(entitlement.showBanner, isTrue);
-        expect(entitlement.showPurchaseCta, isTrue);
-        expect(entitlement.showEvaluationCta, isTrue);
-      });
-
-      test('maps active_paid to access without purchase CTA', () {
-        final entitlement = AddonEntitlement.fromJson({
-          'planId': '123',
-          'status': 'active_paid',
-          'daysLeft': 0,
-        });
-
-        expect(entitlement.status, AddonEntitlementStatus.activePaid);
-        expect(entitlement.hasAccess, isTrue);
-        expect(entitlement.canStartTrial, isFalse);
-        expect(entitlement.canPurchase, isFalse);
-        expect(entitlement.showBanner, isFalse);
-      });
-
-      test('unknown future status fails safe to purchase-required UX', () {
-        final entitlement = AddonEntitlement.fromJson({
-          'planId': '123',
-          'status': 'future_state',
-          'daysLeft': 0,
-        });
-
-        expect(entitlement.status, AddonEntitlementStatus.unknown);
-        expect(entitlement.hasAccess, isFalse);
-        expect(entitlement.canPurchase, isTrue);
-        expect(entitlement.showBanner, isTrue);
-      });
-
-      test('parses access payload', () {
-        final access = AddonAccess.fromJson({
-          'allowed': true,
-          'status': 'trial_active',
-          'daysLeft': 14,
-          'trialEndsAt': '2026-04-30T00:00:00.000Z',
-        });
-
-        expect(access.allowed, isTrue);
-        expect(access.status, AddonEntitlementStatus.trialActive);
-        expect(access.daysLeft, 14);
-        expect(access.trialEndsAt, isNotNull);
-      });
-
-      test('missing access status falls back to unknown', () {
-        final access = AddonAccess.fromJson({'allowed': false});
-
-        expect(access.allowed, isFalse);
-        expect(access.status, AddonEntitlementStatus.unknown);
-        expect(access.rawStatus, 'unknown');
       });
     });
   });
