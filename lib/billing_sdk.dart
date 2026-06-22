@@ -12,6 +12,7 @@ export 'src/exceptions/exceptions.dart';
 export 'src/models/models.dart';
 export 'src/services/services.dart';
 export 'src/entitlements/addon_entitlements.dart';
+export 'src/checkout/addon_checkout_facade.dart';
 
 // Token verification and sync
 export 'src/verification/token_verifier.dart';

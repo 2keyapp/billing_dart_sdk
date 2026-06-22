@@ -11,20 +11,14 @@ class InvoiceService {
     int offset = 0,
     String? status,
   }) async {
-    try {
-      final json = await _client.get('/invoices/me', query: {
-        'limit': limit.toString(),
-        'offset': offset.toString(),
-        if (status != null) 'status': status,
-      });
-      print('listMine response: $json');
-      return unwrapList(json)
-          .map((e) => Invoice.fromJson(e as Map<String, dynamic>))
-          .toList();
-    } catch (e) {
-      print('Error in listMine: $e');
-      rethrow;
-    }
+    final json = await _client.get('/invoices/me', query: {
+      'limit': limit.toString(),
+      'offset': offset.toString(),
+      if (status != null) 'status': status,
+    });
+    return unwrapList(json)
+        .map((e) => Invoice.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   Future<Invoice> get(int id) async {

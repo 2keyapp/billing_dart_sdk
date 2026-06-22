@@ -34,7 +34,8 @@ String billingAddonEntitlementStatusName(BillingAddonEntitlementStatus status) {
 
 bool billingHasAddonAccess(BillingAddonEntitlementStatus status) {
   return status == BillingAddonEntitlementStatus.trialActive ||
-      status == BillingAddonEntitlementStatus.activePaid;
+      status == BillingAddonEntitlementStatus.activePaid ||
+      status == BillingAddonEntitlementStatus.gracePeriod;
 }
 
 bool billingShouldShowPurchaseBanner(BillingAddonEntitlementStatus status) {
@@ -52,7 +53,28 @@ bool billingCanStartEvaluation(BillingAddonEntitlementStatus status) {
 }
 
 bool billingCanPurchaseAddon(BillingAddonEntitlementStatus status) {
-  return status != BillingAddonEntitlementStatus.activePaid;
+  return status != BillingAddonEntitlementStatus.activePaid &&
+      status != BillingAddonEntitlementStatus.gracePeriod;
+}
+
+/// Maps JWT subscription_status to add-on entitlement when purchased.
+BillingAddonEntitlementStatus billingAddonStatusFromSubscription(
+  String subscriptionStatus,
+) {
+  switch (subscriptionStatus.toLowerCase()) {
+    case 'active':
+    case 'trialing':
+      return BillingAddonEntitlementStatus.activePaid;
+    case 'past_due':
+      return BillingAddonEntitlementStatus.gracePeriod;
+    case 'canceled':
+    case 'cancelled':
+      return BillingAddonEntitlementStatus.cancelled;
+    case 'paused':
+      return BillingAddonEntitlementStatus.revoked;
+    default:
+      return BillingAddonEntitlementStatus.unknown;
+  }
 }
 
 final class BillingAddonDefinition {
@@ -63,6 +85,7 @@ final class BillingAddonDefinition {
     required this.currency,
     required this.billingPeriod,
     required this.purchaseUrl,
+    this.pricingId,
   });
 
   final String planId;
@@ -71,6 +94,7 @@ final class BillingAddonDefinition {
   final String currency;
   final String billingPeriod;
   final String purchaseUrl;
+  final String? pricingId;
 }
 
 final class BillingAddonEntitlement {
@@ -119,6 +143,7 @@ abstract interface class BillingEntitlementStore {
   String? getString(String key);
   bool? getBool(String key);
   Future<void> setString(String key, String value);
+  Future<void> setBool(String key, bool value);
 }
 
 final class BillingAddonEntitlementManager {
@@ -146,6 +171,10 @@ final class BillingAddonEntitlementManager {
   bool readPurchased(String planId) =>
       store.getBool(purchasedKey(planId)) ?? false;
 
+  Future<void> writePurchased(String planId, {bool value = true}) async {
+    await store.setBool(purchasedKey(planId), value);
+  }
+
   Future<bool> resolvePurchased({
     required String planId,
     required bool supportsLocalPurchasedFlag,
@@ -165,6 +194,7 @@ final class BillingAddonEntitlementManager {
     required String trialActiveMessageKey,
     required String trialExpiredMessageKey,
     required String notStartedMessageKey,
+    String? subscriptionStatus,
   }) {
     final trialDays = addon.trialDays;
     final trialEndsAt = trialStartedAtUtc?.add(Duration(days: trialDays));
@@ -172,13 +202,18 @@ final class BillingAddonEntitlementManager {
         ? 0
         : trialEndsAt.difference(nowUtc).inDays.clamp(0, trialDays);
 
-    final status = purchased
-        ? BillingAddonEntitlementStatus.activePaid
-        : trialStartedAtUtc == null
-            ? BillingAddonEntitlementStatus.notStarted
-            : nowUtc.isBefore(trialEndsAt!)
-                ? BillingAddonEntitlementStatus.trialActive
-                : BillingAddonEntitlementStatus.trialExpired;
+    final BillingAddonEntitlementStatus status;
+    if (purchased) {
+      status = subscriptionStatus != null && subscriptionStatus.isNotEmpty
+          ? billingAddonStatusFromSubscription(subscriptionStatus)
+          : BillingAddonEntitlementStatus.activePaid;
+    } else if (trialStartedAtUtc == null) {
+      status = BillingAddonEntitlementStatus.notStarted;
+    } else if (nowUtc.isBefore(trialEndsAt!)) {
+      status = BillingAddonEntitlementStatus.trialActive;
+    } else {
+      status = BillingAddonEntitlementStatus.trialExpired;
+    }
 
     return BillingAddonEntitlement(
       planId: addon.planId,
@@ -196,7 +231,7 @@ final class BillingAddonEntitlementManager {
           : status == BillingAddonEntitlementStatus.trialExpired
               ? trialExpiredMessageKey
               : notStartedMessageKey,
-      pricingId: null,
+      pricingId: addon.pricingId,
       trialTotalDays: trialDays,
       canStartTrial: billingCanStartEvaluation(status),
       canPurchase: billingCanPurchaseAddon(status),
@@ -216,6 +251,7 @@ final class BillingAddonEntitlementManager {
     bool autoStartTrialIfNotStarted = false,
     FutureOr<void> Function(String planId, DateTime startedAtUtc)?
         onTrialAutoStarted,
+    FutureOr<String?> Function(String planId)? subscriptionStatusForPlan,
   }) async {
     final nowUtc = DateTime.now().toUtc();
     var trialStartedAt = readTrialStartedAt(addon.planId);
@@ -233,6 +269,11 @@ final class BillingAddonEntitlementManager {
       }
     }
 
+    String? subscriptionStatus;
+    if (purchased && subscriptionStatusForPlan != null) {
+      subscriptionStatus = await subscriptionStatusForPlan(addon.planId);
+    }
+
     return buildEntitlement(
       addon: addon,
       nowUtc: nowUtc,
@@ -241,6 +282,7 @@ final class BillingAddonEntitlementManager {
       trialActiveMessageKey: trialActiveMessageKey,
       trialExpiredMessageKey: trialExpiredMessageKey,
       notStartedMessageKey: notStartedMessageKey,
+      subscriptionStatus: subscriptionStatus,
     );
   }
 

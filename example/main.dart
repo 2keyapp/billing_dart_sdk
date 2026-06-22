@@ -3,7 +3,7 @@ import 'package:billing_sdk/billing_sdk.dart';
 Future<void> main() async {
   // ─── 1. Initialize the client ───────────────────────────────────────────
   final billing = BillingClient(
-    baseUrl: 'http://localhost:3000/api/billing',
+    baseUrl: 'http://localhost:3000',
     tokenProvider: () async {
       // Replace with your real auth token retrieval logic:
       // e.g. return await authService.getAccessToken();

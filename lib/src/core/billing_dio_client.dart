@@ -9,13 +9,16 @@ import 'token_provider.dart';
 /// query-string filtering, and maps HTTP errors to typed exceptions.
 class BillingDioClient implements IBillingHttpClient {
   final Dio _dio;
+  final String? _payingPartyId;
 
   BillingDioClient({
     required String baseUrl,
     TokenProvider? tokenProvider,
+    String? payingPartyId,
     Map<String, String> defaultHeaders = const {},
     Dio? dio,
-  }) : _dio = dio ??
+  })  : _payingPartyId = payingPartyId?.trim(),
+        _dio = dio ??
             Dio(
               BaseOptions(
                 baseUrl: _normalizeBillingApiBaseUrl(baseUrl),
@@ -43,6 +46,10 @@ class BillingDioClient implements IBillingHttpClient {
                           : 'Bearer $trimmed';
                 }
               }
+              final party = _payingPartyId;
+              if (party != null && party.isNotEmpty) {
+                options.headers['X-Paying-Party-Id'] = party;
+              }
             }
             handler.next(options);
           },
@@ -57,12 +64,19 @@ class BillingDioClient implements IBillingHttpClient {
       s = s.substring(0, s.length - 1);
     }
 
-    const suffix = '/api/billing';
-    if (s.toLowerCase().endsWith(suffix)) {
+    const v1 = '/api/v1';
+    const legacy = '/api/billing';
+    final lower = s.toLowerCase();
+    if (lower.endsWith(legacy)) {
+      s = s.substring(0, s.length - legacy.length);
+      while (s.endsWith('/')) {
+        s = s.substring(0, s.length - 1);
+      }
+    } else if (lower.endsWith(v1)) {
       return '$s/';
     }
 
-    return '$s$suffix/';
+    return '$s$v1/';
   }
 
   // ─── IBillingHttpClient ───────────────────────────────────────────────────

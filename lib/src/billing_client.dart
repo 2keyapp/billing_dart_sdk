@@ -15,7 +15,7 @@ export 'services/services.dart';
 ///
 /// ```dart
 /// final billing = BillingClient(
-///   baseUrl: 'https://api.example.com/api/billing',
+///   baseUrl: 'https://api.example.com',
 ///   tokenProvider: () async => await auth.getToken(),
 /// );
 ///
@@ -45,19 +45,23 @@ class BillingClient {
 
   /// Creates a [BillingClient] backed by the built-in Dio transport.
   ///
-  /// [baseUrl]        — Base URL of the billing API, e.g. `https://api.example.com/api/billing`.
+  /// [baseUrl]        — Billing host or API base, e.g. `https://api.example.com`
+  ///                    or `https://api.example.com/api/v1`.
   /// [tokenProvider]  — Async callback returning a valid JWT bearer token (or null for public calls).
+  /// [payingPartyId]  — Optional paying party for multi-org context (`X-Paying-Party-Id`).
   /// [defaultHeaders] — Additional headers merged into every request.
   /// [dio]            — Optional pre-configured [Dio] instance for advanced customisation or testing.
   factory BillingClient({
     required String baseUrl,
     TokenProvider? tokenProvider,
+    String? payingPartyId,
     Map<String, String> defaultHeaders = const {},
     Dio? dio,
   }) {
     final http = BillingDioClient(
       baseUrl: baseUrl,
       tokenProvider: tokenProvider,
+      payingPartyId: payingPartyId,
       defaultHeaders: defaultHeaders,
       dio: dio,
     );

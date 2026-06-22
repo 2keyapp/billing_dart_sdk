@@ -19,19 +19,21 @@ class SyncFailure implements SyncResult {
   final String message;
 }
 
-/// Strips trailing slashes and, if present, a trailing `/api/billing` segment so
-/// callers may pass either the Billing host (`https://billing.example.com`) or
-/// the full API base (`https://billing.example.com/api/billing`).
+/// Strips trailing slashes and, if present, a trailing `/api/v1` or legacy
+/// `/api/billing` segment so callers may pass the Billing host
+/// (`https://billing.example.com`) or a full API base URL.
 String normalizeBillingApiBaseUrl(String input) {
   var s = input.trim();
   while (s.endsWith('/')) {
     s = s.substring(0, s.length - 1);
   }
-  const suffix = '/api/billing';
-  if (s.toLowerCase().endsWith(suffix)) {
-    s = s.substring(0, s.length - suffix.length);
-    while (s.endsWith('/')) {
-      s = s.substring(0, s.length - 1);
+  for (final suffix in const ['/api/v1', '/api/billing']) {
+    if (s.toLowerCase().endsWith(suffix)) {
+      s = s.substring(0, s.length - suffix.length);
+      while (s.endsWith('/')) {
+        s = s.substring(0, s.length - 1);
+      }
+      break;
     }
   }
   return s;
@@ -50,7 +52,7 @@ class BillingApiClient {
     return origin.endsWith('/') ? origin : '$origin/';
   }
 
-  /// GET `{origin}/api/billing/license` with `Authorization: Bearer <token>`.
+  /// GET `{origin}/api/v1/license` with `Authorization: Bearer <token>`.
   ///
   /// [authorizationToken] must be an **AuthAPI** access token (audience must
   /// include Billing). Do not send raw IdP (e.g. Google) tokens.
@@ -74,7 +76,7 @@ class BillingApiClient {
       return const SyncFailure(message: 'Authorization token is required.');
     }
     final token = raw.toLowerCase().startsWith('bearer ') ? raw : 'Bearer $raw';
-    final uri = Uri.parse('${_baseUrl}api/billing/license');
+    final uri = Uri.parse('${_baseUrl}api/v1/license');
     final headers = <String, String>{'Authorization': token};
     final party = payingPartyId?.trim();
     if (party != null && party.isNotEmpty) {
@@ -158,7 +160,7 @@ class BillingApiClient {
     }
   }
 
-  /// GET `{origin}/api/billing/payment-methods` — returns the list of saved
+  /// GET `{origin}/api/v1/payment-methods` — returns the list of saved
   /// payment methods for the authenticated user.
   ///
   /// Returns an empty list on any non-200 or parse error so callers can always
@@ -172,7 +174,7 @@ class BillingApiClient {
       return [];
     }
     final token = raw.toLowerCase().startsWith('bearer ') ? raw : 'Bearer $raw';
-    final uri = Uri.parse('${_baseUrl}api/billing/payment-methods');
+    final uri = Uri.parse('${_baseUrl}api/v1/payment-methods');
 
     BillingSdkLogger.info('fetchPaymentMethods: GET', uri.toString());
 

@@ -12,7 +12,7 @@ import 'package:billing_sdk/src/verification/token_verifier.dart';
 /// Billing SDK: init from saved token, sync from server, paste+verify.
 ///
 /// **HTTP routes used today**
-/// - [syncFromServer] → `GET /api/billing/license` (Bearer + optional
+/// - [syncFromServer] → `GET /api/v1/license` (Bearer + optional
 ///   `X-Paying-Party-Id`). Other routes (subscriptions, seats, etc.) are not
 ///   wrapped here yet; call the Billing API directly if needed.
 ///
@@ -58,9 +58,9 @@ class BillingSdk {
   /// Configures the SDK. Call before [init], [syncFromServer], or [verifyAndDecode].
   ///
   /// [billingApiBaseUrl] – Billing **origin** for HTTP calls, e.g.
-  /// `https://billing.example.com`. Paths use the `/api/billing` prefix
-  /// internally. You may also pass `https://billing.example.com/api/billing`;
-  /// it is normalized to the same origin.
+  /// `https://billing.example.com`. Paths use the `/api/v1` prefix
+  /// internally. You may also pass `https://billing.example.com/api/v1` or the
+  /// legacy `.../api/billing`; both are normalized to the same origin.
   /// [publicKeyPem] – PEM string to verify JWTs; if null, uses embedded default
   /// (replace with key from Billing API in production).
   /// [publicKeyPath] – path to a .pem file; file content is read and validated for
@@ -196,7 +196,7 @@ class BillingSdk {
   /// Returns the current in-memory payload, or null if not initialized or invalid.
   static BillingTokenPayload? getPayload() => _currentPayload;
 
-  /// Syncs from the Billing API: `GET /api/billing/license`.
+  /// Syncs from the Billing API: `GET /api/v1/license`.
   ///
   /// [authorizationToken] — AuthAPI access token (Bearer added if missing).
   /// [payingPartyId] — optional `paying_parties.id` as a string for

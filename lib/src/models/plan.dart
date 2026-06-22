@@ -7,6 +7,7 @@ class Plan {
   final double basePrice;
   final String currency;
   final List<String> features;
+  final Map<String, dynamic>? featuresJson;
   final bool isActive;
 
   const Plan({
@@ -18,23 +19,53 @@ class Plan {
     required this.basePrice,
     required this.currency,
     this.features = const [],
+    this.featuresJson,
     this.isActive = true,
   });
 
-  factory Plan.fromJson(Map<String, dynamic> j) => Plan(
-        id: j['id'] as int,
-        productId: j['productId'] as int,
-        name: j['name'] as String,
-        description: j['description'] as String?,
-        billingInterval: j['billingInterval'] as String,
-        basePrice: (j['basePrice'] as num).toDouble(),
-        currency: j['currency'] as String,
-        features: (j['features'] as List<dynamic>?)
-                ?.map((e) => e as String)
-                .toList() ??
-            [],
-        isActive: j['isActive'] as bool? ?? true,
-      );
+  /// Add-on code from plan metadata (e.g. `secmail.ai_assistant`).
+  String? get addonCode {
+    final raw = featuresJson?['addonCode'];
+    return raw is String && raw.isNotEmpty ? raw : null;
+  }
+
+  /// Product line from plan metadata (e.g. `secmail`).
+  String? get productLine {
+    final raw = featuresJson?['productLine'];
+    return raw is String && raw.isNotEmpty ? raw : null;
+  }
+
+  factory Plan.fromJson(Map<String, dynamic> j) {
+    final featuresRaw = j['featuresJson'] ?? j['features_json'];
+    List<String> features = const [];
+    Map<String, dynamic>? featuresJson;
+
+    if (featuresRaw is List) {
+      features = featuresRaw.map((e) => e.toString()).toList();
+    } else if (featuresRaw is Map<String, dynamic>) {
+      featuresJson = featuresRaw;
+      final nested = featuresRaw['features'];
+      if (nested is List) {
+        features = nested.map((e) => e.toString()).toList();
+      }
+    }
+
+    return Plan(
+      id: j['id'] as int,
+      productId: j['productId'] as int,
+      name: j['name'] as String,
+      description: j['description'] as String?,
+      billingInterval: j['billingInterval'] as String,
+      basePrice: (j['basePrice'] as num).toDouble(),
+      currency: j['currency'] as String,
+      features: (j['features'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList() ??
+          features,
+      featuresJson: featuresJson,
+      isActive: j['isActive'] as bool? ?? true,
+    );
+  }
 }
 
 class Pricing {
@@ -42,6 +73,7 @@ class Pricing {
   final int planId;
   final double price;
   final String currency;
+  final String? billingInterval;
   final bool isActive;
 
   const Pricing({
@@ -49,14 +81,16 @@ class Pricing {
     required this.planId,
     required this.price,
     required this.currency,
+    this.billingInterval,
     this.isActive = true,
   });
 
   factory Pricing.fromJson(Map<String, dynamic> j) => Pricing(
         id: j['id'] as int,
         planId: j['planId'] as int,
-        price: (j['price'] as num).toDouble(),
+        price: ((j['price'] ?? j['basePrice']) as num).toDouble(),
         currency: j['currency'] as String,
+        billingInterval: j['billingInterval'] as String?,
         isActive: j['isActive'] as bool? ?? true,
       );
 }
