@@ -71,4 +71,13 @@ class InvoiceService {
         .map((e) => Invoice.fromJson(e as Map<String, dynamic>))
         .toList();
   }
+
+  /// Stripe hosted receipt / invoice page for a paid invoice.
+  Future<String?> getReceiptUrl(int id) async {
+    final json = await _client.get('/invoices/$id/receipt');
+    final data = unwrapData(json);
+    final url = data['url'];
+    if (url is! String || url.trim().isEmpty) return null;
+    return url.trim();
+  }
 }

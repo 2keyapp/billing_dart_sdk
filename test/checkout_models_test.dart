@@ -36,7 +36,7 @@ void main() {
           'features': ['Smart reply'],
         },
       });
-      expect(plan.addonCode, 'secmail.ai_assistant');
+      expect(plan.resolvedAddonCode, 'secmail.ai_assistant');
       expect(plan.features, contains('Smart reply'));
     });
   });

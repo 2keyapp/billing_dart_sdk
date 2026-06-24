@@ -180,10 +180,13 @@ final class BillingAddonEntitlementManager {
     required bool supportsLocalPurchasedFlag,
     required FutureOr<bool> Function(String planId) hasPurchasedFromSource,
   }) async {
+    if (await hasPurchasedFromSource(planId)) {
+      return true;
+    }
     if (supportsLocalPurchasedFlag) {
       return readPurchased(planId);
     }
-    return await hasPurchasedFromSource(planId);
+    return false;
   }
 
   BillingAddonEntitlement buildEntitlement({

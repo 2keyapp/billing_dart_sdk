@@ -19,5 +19,11 @@ export 'src/verification/token_verifier.dart';
 export 'src/api/billing_api_client.dart';
 export 'src/logging/sdk_logger.dart';
 
+// Session orchestration (token store, sync, subscription matching)
+export 'src/session/billing_session.dart';
+export 'src/session/billing_token_store.dart';
+export 'src/session/billing_subscription_matcher.dart';
+export 'src/session/paying_party_context.dart';
+
 // Card validation (pure Dart — no Flutter dependency)
 export 'src/validation/card_validator.dart';

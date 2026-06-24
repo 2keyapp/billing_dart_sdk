@@ -8,6 +8,7 @@ class Plan {
   final String currency;
   final List<String> features;
   final Map<String, dynamic>? featuresJson;
+  final String? addonCode;
   final bool isActive;
 
   const Plan({
@@ -20,11 +21,13 @@ class Plan {
     required this.currency,
     this.features = const [],
     this.featuresJson,
+    this.addonCode,
     this.isActive = true,
   });
 
-  /// Add-on code from plan metadata (e.g. `secmail.ai_assistant`).
-  String? get addonCode {
+  /// Add-on code from plan metadata (e.g. `ai_assistant`).
+  String? get resolvedAddonCode {
+    if (addonCode != null && addonCode!.isNotEmpty) return addonCode;
     final raw = featuresJson?['addonCode'];
     return raw is String && raw.isNotEmpty ? raw : null;
   }
@@ -51,8 +54,8 @@ class Plan {
     }
 
     return Plan(
-      id: j['id'] as int,
-      productId: j['productId'] as int,
+      id: _parseInt(j['id']) ?? 0,
+      productId: _parseInt(j['productId'] ?? j['product_id']) ?? 0,
       name: j['name'] as String,
       description: j['description'] as String?,
       billingInterval: j['billingInterval'] as String,
@@ -63,8 +66,16 @@ class Plan {
               .toList() ??
           features,
       featuresJson: featuresJson,
+      addonCode: j['addonCode'] as String?,
       isActive: j['isActive'] as bool? ?? true,
     );
+  }
+
+  static int? _parseInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value);
+    return null;
   }
 }
 

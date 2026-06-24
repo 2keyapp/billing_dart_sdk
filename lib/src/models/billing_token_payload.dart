@@ -80,8 +80,9 @@ class BillingTokenPayload {
       subscriptions.any((s) => s.subscriptionId == subscriptionId);
 
   /// Whether the payload has any subscription for the given plan (add-on check).
-  bool hasPlan(String planId) =>
-      subscriptions.any((s) => s.planId == planId && s.isActive);
+  bool hasPlan(String planId) => subscriptions.any(
+        (s) => s.isActive && s.matchesAddonRef(planId),
+      );
 
   /// Whether the payload has any subscription for the given product (add-on check).
   bool hasProduct(String productId) =>

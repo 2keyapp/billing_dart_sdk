@@ -239,6 +239,16 @@ class BillingSdk {
     }
   }
 
+  /// Ensures billing account context via `GET /api/v1/subscriptions/me`.
+  static Future<BootstrapResult> ensureBillingContext({
+    required String authorizationToken,
+  }) async {
+    BillingSdkLogger.info('ensureBillingContext: requesting subscriptions/me');
+    return _apiClientOrThrow.ensureBillingContext(
+      authorizationToken: authorizationToken,
+    );
+  }
+
   /// Fetches saved payment methods for the authenticated user.
   ///
   /// [authorizationToken] — AuthAPI access token (Bearer added if missing).

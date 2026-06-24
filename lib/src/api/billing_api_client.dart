@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../logging/sdk_logger.dart';
 import '../models/payment_method.dart';
+import '../exceptions/billing_sync_error.dart';
 
 /// Result of syncing from the Billing API.
 sealed class SyncResult {}
@@ -15,8 +16,24 @@ class SyncSuccess implements SyncResult {
 }
 
 class SyncFailure implements SyncResult {
-  const SyncFailure({required this.message});
+  const SyncFailure({required this.message, this.error});
   final String message;
+  final BillingSyncError? error;
+}
+
+/// Result of ensuring billing context via `GET /api/v1/subscriptions/me`.
+sealed class BootstrapResult {
+  const BootstrapResult();
+}
+
+class BootstrapSuccess extends BootstrapResult {
+  const BootstrapSuccess();
+}
+
+class BootstrapFailure extends BootstrapResult {
+  const BootstrapFailure({required this.message, this.error});
+  final String message;
+  final BillingSyncError? error;
 }
 
 /// Strips trailing slashes and, if present, a trailing `/api/v1` or legacy
@@ -110,45 +127,24 @@ class BillingApiClient {
               ? '${response.body.substring(0, 200)}...'
               : response.body,
         );
-        return const SyncFailure(
-          message: 'Sync failed. Invalid response from server.',
+        final err = BillingSyncError(
+          kind: BillingSyncErrorKind.invalidResponse,
+          userMessage: 'Invalid response from billing server. Try again or report this issue.',
+          technicalDetail: 'fetchLicense: 200 without signedToken',
         );
+        return SyncFailure(message: err.userMessage, error: err);
       }
 
-      if (response.statusCode == 400) {
-        BillingSdkLogger.error('fetchLicense: 400 Bad request');
-        return const SyncFailure(message: 'Bad request. Check your token.');
-      }
-
-      if (response.statusCode == 401) {
-        BillingSdkLogger.error('fetchLicense: 401 Unauthorized');
-        return const SyncFailure(
-          message: 'Session expired or invalid. Please sign in again.',
-        );
-      }
-
-      if (response.statusCode == 403) {
-        BillingSdkLogger.error('fetchLicense: 403 Forbidden');
-        return const SyncFailure(
-          message:
-              'You do not have access to this billing action. Try another organization or contact your administrator.',
-        );
-      }
-
-      if (response.statusCode == 404) {
-        BillingSdkLogger.error('fetchLicense: 404 Not found');
-        return const SyncFailure(
-          message: 'No billing account found for this user.',
-        );
-      }
-
-      BillingSdkLogger.error(
-        'fetchLicense: unexpected status',
-        '${response.statusCode}',
+      final err = billingSyncErrorFromHttp(
+        statusCode: response.statusCode,
+        operation: 'fetchLicense',
+        responseBody: response.body,
       );
-      return const SyncFailure(message: 'Sync failed. Try again later.');
+      BillingSdkLogger.error('fetchLicense: HTTP ${response.statusCode}', err.technicalDetail);
+      return SyncFailure(message: err.userMessage, error: err);
     } catch (e, st) {
-      BillingSdkLogger.error('fetchLicense: request failed', '$e');
+      final err = billingSyncErrorFromNetwork(e, operation: 'fetchLicense');
+      BillingSdkLogger.error('fetchLicense: request failed', err.technicalDetail ?? '$e');
       developer.log(
         'fetchLicense stack',
         name: 'BillingSdk',
@@ -156,7 +152,58 @@ class BillingApiClient {
         error: e,
         stackTrace: st,
       );
-      return const SyncFailure(message: 'Sync failed. Try again later.');
+      return SyncFailure(message: err.userMessage, error: err);
+    }
+  }
+
+  /// GET `{origin}/api/v1/subscriptions/me` — ensures billing account context
+  /// exists before license sync.
+  Future<BootstrapResult> ensureBillingContext({
+    required String authorizationToken,
+  }) async {
+    final raw = authorizationToken.trim();
+    if (raw.isEmpty) {
+      return const BootstrapFailure(
+        message: 'Authorization token is required.',
+      );
+    }
+    final token = raw.toLowerCase().startsWith('bearer ') ? raw : 'Bearer $raw';
+    final uri = Uri.parse('${_baseUrl}api/v1/subscriptions/me');
+
+    BillingSdkLogger.info('ensureBillingContext: GET', uri.toString());
+
+    try {
+      final response = await http.get(uri, headers: {'Authorization': token});
+
+      if (response.statusCode == 200) {
+        BillingSdkLogger.success('ensureBillingContext: ok');
+        return const BootstrapSuccess();
+      }
+
+      final err = billingSyncErrorFromHttp(
+        statusCode: response.statusCode,
+        operation: 'ensureBillingContext',
+        responseBody: response.body,
+      );
+      BillingSdkLogger.error(
+        'ensureBillingContext: HTTP ${response.statusCode}',
+        err.technicalDetail,
+      );
+      return BootstrapFailure(message: err.userMessage, error: err);
+    } catch (e, st) {
+      final err = billingSyncErrorFromNetwork(e, operation: 'ensureBillingContext');
+      BillingSdkLogger.error(
+        'ensureBillingContext: request failed',
+        err.technicalDetail ?? '$e',
+      );
+      developer.log(
+        'ensureBillingContext stack',
+        name: 'BillingSdk',
+        level: 1000,
+        error: e,
+        stackTrace: st,
+      );
+      return BootstrapFailure(message: err.userMessage, error: err);
     }
   }
 

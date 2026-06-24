@@ -11,6 +11,7 @@ class BillingSubscription {
     required this.productName,
     required this.subscriptionStatus,
     required this.validUntil,
+    this.addonCode,
     this.assignedUserPartyId,
   });
 
@@ -21,6 +22,8 @@ class BillingSubscription {
   final String productName;
   final String subscriptionStatus;
   final DateTime validUntil;
+  /// Stable add-on code from billing (`linux`, `ai_assistant`, …).
+  final String? addonCode;
   final String? assignedUserPartyId;
 
   /// Parses from subscription object in JWT payload. Throws [FormatException] if invalid.
@@ -54,6 +57,7 @@ class BillingSubscription {
       'assigned_user_party_id',
       'assignedUserPartyId',
     );
+    final addonCodeRaw = getKey(json, 'addon_code', 'addonCode');
     return BillingSubscription(
       subscriptionId: subscriptionId,
       planId: planId,
@@ -62,9 +66,21 @@ class BillingSubscription {
       productName: productName,
       subscriptionStatus: status,
       validUntil: dateTimeFromUnixSeconds(validUntilInt),
+      addonCode: addonCodeRaw is String && addonCodeRaw.isNotEmpty
+          ? addonCodeRaw
+          : null,
       assignedUserPartyId:
           assigned is String && assigned.isNotEmpty ? assigned : null,
     );
+  }
+
+  /// Matches a catalog add-on id (stable code or numeric billing plan id).
+  bool matchesAddonRef(String addonRef) {
+    final target = addonRef.trim().toLowerCase();
+    if (target.isEmpty) return false;
+    if (planId.toLowerCase() == target) return true;
+    if (addonCode?.toLowerCase() == target) return true;
+    return false;
   }
 
   /// Whether this subscription is currently active (e.g. active, trialing).

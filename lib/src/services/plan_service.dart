@@ -9,12 +9,12 @@ class PlanService {
   Future<List<Plan>> list({
     int? productId,
     String? billingInterval,
-    bool? isActive,
+    bool includeInactive = false,
   }) async {
     final json = await _client.get('/plans', query: {
       if (productId != null) 'productId': productId.toString(),
       if (billingInterval != null) 'billingInterval': billingInterval,
-      if (isActive != null) 'isActive': isActive.toString(),
+      if (includeInactive) 'includeInactive': 'true',
     }, requiresAuth: false);
     return unwrapList(json)
         .map((e) => Plan.fromJson(e as Map<String, dynamic>))
