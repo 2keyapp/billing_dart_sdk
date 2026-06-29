@@ -1,6 +1,8 @@
-# Billing Flutter SDK
+# Billing Dart SDK
 
-Flutter SDK for billing token verification, in-memory entitlements, sync from the Billing API, and paste-and-verify flows. For client-only apps (e.g. Scomm); the only backend is the Billing API.
+Dart SDK for billing token verification, in-memory entitlements, sync from the Billing API, and paste-and-verify flows. For client-only apps (e.g. Scomm); the only backend is the Billing API.
+
+A Flutter example app is included for local development and manual testing.
 
 ---
 
@@ -18,14 +20,16 @@ Add the package to your app’s `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  billing_flutter_sdk:
-    path: ../billing_flutter_sdk   # or your path / git ref
+  billing_dart_sdk:
+    path: ../billing_dart_sdk   # or your path / git ref
 ```
 
 Then run:
 
 ```bash
-flutter pub get
+dart pub get   # pure Dart apps
+# or
+flutter pub get   # Flutter apps
 ```
 
 ---
@@ -34,10 +38,10 @@ flutter pub get
 
 1. **Configure** the SDK once (e.g. at app startup), before any other calls.
 
-   **Recommended:** Embed the Billing API public key as an asset so it is included in the build. Add the `.pem` file to your `pubspec.yaml` under `flutter: assets:`. Use a path that does **not** start with `assets/` (e.g. `keys/billing_public.pem`) so Flutter web does not double-prefix the URL:
+   **Recommended (Flutter apps):** Embed the Billing API public key as an asset so it is included in the build. Add the `.pem` file to your `pubspec.yaml` under `flutter: assets:`. Use a path that does **not** start with `assets/` (e.g. `keys/billing_public.pem`) so Flutter web does not double-prefix the URL:
 
 ```dart
-import 'package:billing_flutter_sdk/billing_flutter_sdk.dart';
+import 'package:billing_dart_sdk/billing_dart_sdk.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -113,7 +117,7 @@ switch (result) {
 | `billingApiBaseUrl` | Base URL of the Billing API (required for `syncFromServer`). |
 | `publicKeyPem` | EC public key PEM (ES256) to verify JWTs. If omitted, the SDK uses an embedded default; **set from your Billing API in production.** |
 | `publicKeyPath` | Path to a `.pem` file on disk. The file is read and validated (must contain `-----BEGIN PUBLIC KEY-----` and `-----END PUBLIC KEY-----`). Not supported on web; use `publicKeyPem` or asset there. |
-| **Asset (recommended)** | Call `BillingSdk.configureWithAsset(publicKeyAsset: 'keys/billing_public.pem')` (or `loadPublicKeyFromAsset` then `configure`). Use a path that does not start with `assets/` (e.g. `keys/`) so web works. Add the `.pem` to `pubspec.yaml` under `flutter: assets:`. Same PEM validation applies. |
+| **Asset (Flutter)** | Call `BillingSdk.configureWithAsset(publicKeyAsset: 'keys/billing_public.pem')` (or `loadPublicKeyFromAsset` then `configure`). Use a path that does not start with `assets/` (e.g. `keys/`) so web works. Add the `.pem` to `pubspec.yaml` under `flutter: assets:`. Same PEM validation applies. |
 
 ---
 
@@ -131,7 +135,7 @@ From the SDK project root:
 ```bash
 flutter pub get
 flutter test
-flutter run
+flutter run   # runs the Flutter example app
 ```
 
 - **[PLAN.md](PLAN.md)** – Development plan, API contract, and Billing API alignment.

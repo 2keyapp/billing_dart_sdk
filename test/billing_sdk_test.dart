@@ -1,4 +1,4 @@
-import 'package:billing_flutter_sdk/billing_flutter_sdk.dart';
+import 'package:billing_dart_sdk/billing_dart_sdk.dart';
 import 'package:dart_jsonwebtoken/dart_jsonwebtoken.dart';
 import 'package:flutter_test/flutter_test.dart';
 

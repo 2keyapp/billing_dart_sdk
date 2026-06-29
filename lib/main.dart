@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'package:billing_flutter_sdk/billing_flutter_sdk.dart';
+import 'package:billing_dart_sdk/billing_dart_sdk.dart';
 
 void main() {
   runApp(const BillingExampleApp());

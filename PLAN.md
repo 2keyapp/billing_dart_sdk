@@ -120,9 +120,9 @@ BillingSdk.configure({String? billingApiBaseUrl, String? publicKeyPem});
 ## 6. Suggested Package Layout
 
 ```
-billing_flutter_sdk/
+billing_dart_sdk/
 ├── lib/
-│   ├── billing_flutter_sdk.dart       # Export file (public API)
+│   ├── billing_dart_sdk.dart       # Export file (public API)
 │   ├── src/
 │   │   ├── billing_sdk.dart           # BillingSdk: init, syncFromServer, verifyAndDecode, configure, getPayload
 │   │   ├── models/
