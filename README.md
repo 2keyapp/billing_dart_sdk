@@ -1,22 +1,28 @@
 # Billing Dart SDK
 
-Dart SDK for billing token verification, in-memory entitlements, sync from the Billing API, and paste-and-verify flows. For client-only apps (e.g. Scomm); the only backend is the Billing API.
+Dart SDK for **using-party client apps** (e.g. Scomm): embedded billing auth, license JWT sync, offline entitlements, and public plan catalog. Not a full Billing API client — portal/admin routes stay on the server.
 
 A Flutter example app is included for local development and manual testing.
 
 ---
 
-## Features
+## What this SDK does
 
-- **Init** – Decode saved signed JWT on app start and keep payload in memory for add-on checks.
-- **Sync** – Sync billing from the server (GET /api/billing/license) with required authorization token.
-- **Paste + verify** – Verify pasted token and expose payload (or a user-facing error) so the app can persist and show notifications.
+| Concern | SDK surface |
+|--------|-------------|
+| Login | `BillingAuthClient` — PKCE OAuth against `/api/auth` |
+| Session | `BillingSession` — persist auth + license, online sync, offline verify |
+| License | `BillingSdk.syncFromServer` → `GET /api/v1/license` |
+| Bootstrap | `BillingSdk.ensureBillingContext` → `GET /api/v1/subscriptions/me` |
+| Offline | `BillingSdk.init` / `verifyAndDecode` — ES256 license JWT verify |
+| Entitlements | `BillingSdk.getPayload()` — subscriptions, add-ons from JWT |
+| Catalog | `BillingSdk.fetchPlanCatalog()` — public monthly/annual plans |
+
+**Paying-party portal** access is separate; the server validates portal users. The SDK exposes `BillingAccountSession.canOpenBillingPortal` when the authenticated identity owns the org.
 
 ---
 
 ## Installation
-
-Add the package to your app’s `pubspec.yaml`:
 
 ```yaml
 dependencies:
@@ -24,88 +30,108 @@ dependencies:
     path: ../billing_dart_sdk   # or your path / git ref
 ```
 
-Then run:
-
 ```bash
-dart pub get   # pure Dart apps
-# or
-flutter pub get   # Flutter apps
+flutter pub get   # or dart pub get
 ```
 
 ---
 
 ## Setup
 
-1. **Configure** the SDK once (e.g. at app startup), before any other calls.
-
-   **Recommended (Flutter apps):** Embed the Billing API public key as an asset so it is included in the build. Add the `.pem` file to your `pubspec.yaml` under `flutter: assets:`. Use a path that does **not** start with `assets/` (e.g. `keys/billing_public.pem`) so Flutter web does not double-prefix the URL:
+### 1. Configure the SDK
 
 ```dart
 import 'package:billing_dart_sdk/billing_dart_sdk.dart';
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await BillingSdk.configureWithAsset(
-    billingApiBaseUrl: 'https://billing.example.com',
-    publicKeyAsset: 'keys/billing_public.pem',
-  );
-  runApp(MyApp());
+await BillingSdk.configureWithAsset(
+  billingApiBaseUrl: 'https://billing.example.com',
+  publicKeyAsset: 'keys/billing_public.pem',
+);
+```
+
+- `billingApiBaseUrl` — billing **origin** (e.g. `https://billing.example.com`). The SDK calls `/api/v1/*` internally.
+- `publicKeyPem` / asset — EC public key (ES256) to verify **license** JWTs from `GET /api/v1/license`.
+
+### 2. Auth (PKCE)
+
+Billing hosts its own auth at `/api/auth`. The app opens a browser for login, then exchanges the authorization code:
+
+```dart
+final auth = BillingAuthClient(billingBaseUrl: 'https://billing.example.com');
+final pkce = BillingPkceRequest.create(
+  redirectUri: 'myapp://auth/callback',
+);
+
+// Open auth.buildAuthorizeUrl(...) in browser; user returns with ?code=...
+final tokens = await auth.exchangeAuthorizationCode(
+  code: authorizationCode,
+  redirectUri: pkce.redirectUri,
+  codeVerifier: pkce.codeVerifier,
+);
+```
+
+Use `tokens.accessToken` (audience `billing`) for sync — not raw Google/Microsoft IdP tokens.
+
+### 3. Session + sync
+
+Implement `BillingSessionStore` (secure storage) or use `InMemoryBillingSessionStore` for tests:
+
+```dart
+final session = BillingSession(store: mySecureStore);
+
+await session.persistAuthTokens(accountKey: userId, tokens: tokens);
+
+final outcome = await session.syncOnlineForAccount(accountKey: userId);
+switch (outcome) {
+  case SessionSyncSuccess(:final session):
+    // session.licensePayload, session.billingStats, session.isUsingParty
+  case SessionSyncFailure(:final message):
+    // show message
 }
 ```
 
-   The asset content is validated (must contain `-----BEGIN PUBLIC KEY-----` and `-----END PUBLIC KEY-----`). Alternatively use [configure](#configuration) with `publicKeyPem` or `publicKeyPath`.
-
-2. **Init** on app start with the saved token from your storage (e.g. secure storage). If you have no token yet, pass `null`.
+On next launch:
 
 ```dart
-// In your app’s init flow (e.g. after reading from secure storage)
-final savedToken = await storage.readBillingToken(); // your code
-BillingSdk.init(savedToken);
+await session.initForAccount(userId); // restores license JWT → BillingSdk.getPayload()
+```
+
+### 4. Offline / paste
+
+```dart
+await session.verifyOfflineToken(accountKey: userId, token: pastedJwt);
+// or
+BillingSdk.verifyAndDecode(pastedJwt);
 ```
 
 ---
 
 ## Usage
 
-### Add-on checks
-
-After `init` (or after a successful sync/verify), use the current payload for entitlements:
+### Entitlements (from license JWT)
 
 ```dart
 final payload = BillingSdk.getPayload();
-if (payload != null && payload.hasSubscription('sub_premium')) {
-  // Show premium feature
+if (payload != null && payload.hasAddon('ai_assistant')) {
+  // enable feature
 }
+if (payload?.hasPlan('plan_premium') ?? false) { /* ... */ }
 ```
 
-### Sync from server
+### Plan catalog (public, no auth)
 
-Call when the user taps “Sync billing”. Only the authorization token is required (Bearer or SSO token). GET /api/billing/license with no query params.
+```dart
+final catalog = await BillingSdk.fetchPlanCatalog(productId: 1);
+// catalog.monthly, catalog.annual
+```
+
+### Manual sync (without session helper)
 
 ```dart
 final result = await BillingSdk.syncFromServer(
-  authorizationToken: userAuthToken, // required
+  authorizationToken: tokens.accessToken,
+  payingPartyId: null, // optional X-Paying-Party-Id for multi-org
 );
-switch (result) {
-  case SyncSuccess():
-    // Optionally persist the new token; payload is already in memory
-  case SyncFailure(:final message):
-    // Show message in a snackbar or dialog
-}
-```
-
-### Paste + verify
-
-When the user pastes a token (e.g. from the billing portal):
-
-```dart
-final result = BillingSdk.verifyAndDecode(pastedJson);
-switch (result) {
-  case VerifySuccess(:final payload):
-    // Persist pastedJson (and/or payload) for init on next launch
-  case VerifyFailure(:final error):
-    // Show error.message in an error notification
-}
 ```
 
 ---
@@ -114,29 +140,27 @@ switch (result) {
 
 | Option | Description |
 |--------|-------------|
-| `billingApiBaseUrl` | Base URL of the Billing API (required for `syncFromServer`). |
-| `publicKeyPem` | EC public key PEM (ES256) to verify JWTs. If omitted, the SDK uses an embedded default; **set from your Billing API in production.** |
-| `publicKeyPath` | Path to a `.pem` file on disk. The file is read and validated (must contain `-----BEGIN PUBLIC KEY-----` and `-----END PUBLIC KEY-----`). Not supported on web; use `publicKeyPem` or asset there. |
-| **Asset (Flutter)** | Call `BillingSdk.configureWithAsset(publicKeyAsset: 'keys/billing_public.pem')` (or `loadPublicKeyFromAsset` then `configure`). Use a path that does not start with `assets/` (e.g. `keys/`) so web works. Add the `.pem` to `pubspec.yaml` under `flutter: assets:`. Same PEM validation applies. |
+| `billingApiBaseUrl` | Billing host origin (required for API calls). |
+| `publicKeyPem` | EC PEM for license JWT verification (ES256). |
+| `publicKeyPath` | Load PEM from disk (not on web). |
+| `publicKeyAsset` | Flutter asset path (recommended; avoid `assets/` prefix on web). |
 
 ---
 
 ## Important
 
-- **Persistence** – The SDK does not persist tokens. Your app must save/load the raw token and pass it to `init` on launch.
-- **Errors** – The SDK returns user-facing messages (`BillingTokenError.message`, `SyncFailure.message`). Your app should show them (e.g. snackbar, dialog).
+- **Two token types** — OAuth **access token** (API auth) vs **license JWT** (offline entitlements). The SDK verifies the license JWT locally; access tokens are sent as `Authorization: Bearer`.
+- **Persistence** — Use `BillingSession` + `BillingSessionStore` for auth tokens, license JWT, and account context. `BillingSdk.init` only loads into memory.
+- **Scope** — This SDK does not wrap checkout, invoices, seat management, or other portal APIs. Call those from the portal or integrate separately if needed.
 
 ---
 
 ## Development
 
-From the SDK project root:
-
 ```bash
 flutter pub get
 flutter test
-flutter run   # runs the Flutter example app
+flutter run   # Flutter example app
 ```
 
-- **[PLAN.md](PLAN.md)** – Development plan, API contract, and Billing API alignment.
-- **[CODE_REVIEW.md](CODE_REVIEW.md)** – Code review flow and reviewer checklist.
+- **[PLAN.md](PLAN.md)** — development plan and API alignment notes.
