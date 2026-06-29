@@ -84,9 +84,14 @@ class BillingTokenPayload {
   bool hasPlan(String planId) =>
       subscriptions.any((s) => s.planId == planId && s.isActive);
 
-  /// Whether the payload has any subscription for the given product (add-on check).
+  /// Whether the payload has any subscription for the given product.
   bool hasProduct(String productId) =>
       subscriptions.any((s) => s.productId == productId && s.isActive);
+
+  /// Whether the payload has an active subscription for the given add-on code.
+  bool hasAddon(String addonCode) => subscriptions.any(
+        (s) => s.isActive && s.addonCode == addonCode,
+      );
 
   /// Whether the token is still valid (not expired).
   bool get isExpired => DateTime.now().isAfter(expiresAt);

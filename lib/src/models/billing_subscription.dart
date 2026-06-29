@@ -11,6 +11,10 @@ class BillingSubscription {
     required this.productName,
     required this.subscriptionStatus,
     required this.validUntil,
+    this.addonCode,
+    this.usingPartyIdentityProvider,
+    this.usingPartyIdentitySubject,
+    this.usingPartyEmail,
     this.assignedUserPartyId,
   });
 
@@ -21,6 +25,10 @@ class BillingSubscription {
   final String productName;
   final String subscriptionStatus;
   final DateTime validUntil;
+  final String? addonCode;
+  final String? usingPartyIdentityProvider;
+  final String? usingPartyIdentitySubject;
+  final String? usingPartyEmail;
   final String? assignedUserPartyId;
 
   /// Parses from subscription object in JWT payload. Throws [FormatException] if invalid.
@@ -54,6 +62,18 @@ class BillingSubscription {
       'assigned_user_party_id',
       'assignedUserPartyId',
     );
+    final addon = getKey(json, 'addon_code', 'addonCode');
+    final usingProvider = getKey(
+      json,
+      'using_party_identity_provider',
+      'usingPartyIdentityProvider',
+    );
+    final usingSubject = getKey(
+      json,
+      'using_party_identity_subject',
+      'usingPartyIdentitySubject',
+    );
+    final usingEmail = getKey(json, 'using_party_email', 'usingPartyEmail');
     return BillingSubscription(
       subscriptionId: subscriptionId,
       planId: planId,
@@ -62,6 +82,12 @@ class BillingSubscription {
       productName: productName,
       subscriptionStatus: status,
       validUntil: dateTimeFromUnixSeconds(validUntilInt),
+      addonCode: addon is String && addon.isNotEmpty ? addon : null,
+      usingPartyIdentityProvider:
+          usingProvider is String && usingProvider.isNotEmpty ? usingProvider : null,
+      usingPartyIdentitySubject:
+          usingSubject is String && usingSubject.isNotEmpty ? usingSubject : null,
+      usingPartyEmail: usingEmail is String && usingEmail.isNotEmpty ? usingEmail : null,
       assignedUserPartyId: assigned is String && assigned.isNotEmpty
           ? assigned
           : null,
@@ -72,6 +98,13 @@ class BillingSubscription {
   bool get isActive =>
       subscriptionStatus.toLowerCase() == 'active' ||
       subscriptionStatus.toLowerCase() == 'trialing';
+
+  /// Whether [addonRef] matches server [addonCode] metadata.
+  bool matchesAddonRef(String addonRef) {
+    final code = addonCode;
+    if (code == null || code.isEmpty) return false;
+    return code.toLowerCase() == addonRef.trim().toLowerCase();
+  }
 
   /// Whether the validity period has ended (now > valid_until).
   bool get isPeriodEnded => DateTime.now().isAfter(validUntil);

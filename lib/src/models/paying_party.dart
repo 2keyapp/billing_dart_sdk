@@ -1,7 +1,6 @@
 import 'jwt_payload_keys.dart';
 
-/// Paying party (org) that owns the subscriptions.
-/// Schema: id, identity_provider, identity_subject, billing_email, organization_name (optional).
+/// Paying party (org) that owns the subscriptions — from license JWT `paying_party`.
 class PayingParty {
   const PayingParty({
     required this.id,
@@ -12,20 +11,13 @@ class PayingParty {
   });
 
   final String id;
-
-  /// IdP name (e.g. "google", "microsoft").
   final String identityProvider;
-
-  /// Subject ID from the identity provider.
   final String identitySubject;
   final String billingEmail;
   final String? organizationName;
 
-  /// Legacy: use [identitySubject]. Kept for backward compatibility.
   String get ssoId => identitySubject;
 
-  /// Parses from JWT payload map (snake_case or camelCase). Throws [FormatException] if invalid.
-  /// Accepts current schema (identity_provider, identity_subject) or legacy sso_id.
   factory PayingParty.fromJson(Map<String, dynamic> json) {
     final id = getKey(json, 'id', 'id');
     final identityProvider = getKey(
@@ -36,10 +28,12 @@ class PayingParty {
     final identitySubject = getKey(json, 'identity_subject', 'identitySubject');
     final ssoIdLegacy = getKey(json, 'sso_id', 'ssoId');
     final billingEmail = getKey(json, 'billing_email', 'billingEmail');
-    if (id is! String || id.isEmpty)
+    if (id is! String || id.isEmpty) {
       throw FormatException('paying_party.id required.');
-    if (billingEmail is! String)
+    }
+    if (billingEmail is! String) {
       throw FormatException('paying_party.billing_email required.');
+    }
     final provider = identityProvider is String && identityProvider.isNotEmpty
         ? identityProvider
         : (ssoIdLegacy is String && ssoIdLegacy.isNotEmpty ? 'legacy' : null);
@@ -73,10 +67,10 @@ class PayingParty {
 
   @override
   int get hashCode => Object.hash(
-    id,
-    identityProvider,
-    identitySubject,
-    billingEmail,
-    organizationName,
-  );
+        id,
+        identityProvider,
+        identitySubject,
+        billingEmail,
+        organizationName,
+      );
 }
