@@ -10,7 +10,7 @@ import '../models/billing_token_payload.dart';
 /// a [BillingTokenError] with a user-facing message.
 class TokenVerifier {
   TokenVerifier({required String publicKeyPem})
-      : _publicKey = ECPublicKey(publicKeyPem);
+    : _publicKey = ECPublicKey(publicKeyPem);
 
   final ECPublicKey _publicKey;
 
@@ -144,9 +144,10 @@ class TokenVerifier {
         'Invalid format. Please paste the full token from the billing portal.',
       BillingTokenErrorReason.missingClaims =>
         'Token is missing required data.',
-      BillingTokenErrorReason.unknown => fallback.isNotEmpty
-          ? fallback
-          : 'Invalid token. It may have been copied incorrectly.',
+      BillingTokenErrorReason.unknown =>
+        fallback.isNotEmpty
+            ? fallback
+            : 'Invalid token. It may have been copied incorrectly.',
     };
   }
 }

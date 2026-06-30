@@ -1,6 +1,7 @@
 // Conditional import: use file-based loader on IO platforms, stub on web.
 import 'public_key_loader_stub.dart'
-    if (dart.library.io) 'public_key_loader_io.dart' as loader;
+    if (dart.library.io) 'public_key_loader_io.dart'
+    as loader;
 
 /// Loads and validates public key PEM from a file path.
 ///

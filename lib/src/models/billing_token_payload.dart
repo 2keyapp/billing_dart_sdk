@@ -32,8 +32,9 @@ class BillingTokenPayload {
     if (version == null)
       throw FormatException('payload_version (number) required.');
     final exp = parseInt(json['exp']);
-    final expiresAt =
-        exp != null ? dateTimeFromUnixSeconds(exp) : _defaultExpiresAt;
+    final expiresAt = exp != null
+        ? dateTimeFromUnixSeconds(exp)
+        : _defaultExpiresAt;
     final payingPartyRaw = getKey(json, 'paying_party', 'payingParty');
     if (payingPartyRaw is! Map<String, dynamic>)
       throw FormatException('paying_party object required.');
@@ -80,13 +81,17 @@ class BillingTokenPayload {
       subscriptions.any((s) => s.subscriptionId == subscriptionId);
 
   /// Whether the payload has any subscription for the given plan (add-on check).
-  bool hasPlan(String planId) => subscriptions.any(
-        (s) => s.isActive && s.matchesAddonRef(planId),
-      );
+  bool hasPlan(String planId) =>
+      subscriptions.any((s) => s.planId == planId && s.isActive);
 
-  /// Whether the payload has any subscription for the given product (add-on check).
+  /// Whether the payload has any subscription for the given product.
   bool hasProduct(String productId) =>
       subscriptions.any((s) => s.productId == productId && s.isActive);
+
+  /// Whether the payload has an active subscription for the given add-on code.
+  bool hasAddon(String addonCode) => subscriptions.any(
+        (s) => s.isActive && s.addonCode == addonCode,
+      );
 
   /// Whether the token is still valid (not expired).
   bool get isExpired => DateTime.now().isAfter(expiresAt);
@@ -98,20 +103,22 @@ class BillingTokenPayload {
           runtimeType == other.runtimeType &&
           payloadVersion == other.payloadVersion &&
           expiresAt == other.expiresAt &&
-          issuedAt == other.issuedAt &&
-          issuer == other.issuer &&
-          audience == other.audience &&
           payingParty == other.payingParty &&
-          subscriptions == other.subscriptions;
+          _listEquals(subscriptions, other.subscriptions);
+
+  static bool _listEquals<T>(List<T> a, List<T> b) {
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
 
   @override
   int get hashCode => Object.hash(
-        payloadVersion,
-        expiresAt,
-        issuedAt,
-        issuer,
-        audience,
-        payingParty,
-        subscriptions,
-      );
+    payloadVersion,
+    expiresAt,
+    payingParty,
+    Object.hashAll(subscriptions),
+  );
 }

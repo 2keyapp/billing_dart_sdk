@@ -1,17 +1,20 @@
 import '../api/billing_api_client.dart';
+import '../auth/auth_user_profile.dart';
+import '../auth/billing_auth_tokens.dart';
 import '../exceptions/billing_sync_error.dart';
 import '../models/billing_token_error.dart';
 import '../models/billing_token_payload.dart';
-import '../sdk.dart';
-import 'billing_token_store.dart';
-import 'paying_party_context.dart';
+import '../billing_sdk.dart';
+import 'billing_account_session.dart';
+import 'billing_session_store.dart';
 
 sealed class SessionSyncOutcome {
   const SessionSyncOutcome();
 }
 
 class SessionSyncSuccess extends SessionSyncOutcome {
-  const SessionSyncSuccess(this.message);
+  const SessionSyncSuccess(this.session, {this.message = 'Subscription data updated.'});
+  final BillingAccountSession session;
   final String message;
 }
 
@@ -35,31 +38,76 @@ class SessionVerifyFailure extends SessionVerifyOutcome {
   final String message;
 }
 
-/// Orchestrates license JWT persistence, online sync, and offline verification.
+/// Orchestrates auth tokens, license JWT persistence, online sync, and offline verify.
+///
+/// **Using party (SDK app):** sync loads assigned subscriptions into the license JWT.
+/// **Paying party (portal):** [BillingAccountSession.canOpenBillingPortal] is true when
+/// the authenticated identity owns the org; portal validates server-side.
 class BillingSession {
-  BillingSession({required BillingTokenStore store}) : _store = store;
+  BillingSession({required BillingSessionStore store}) : _store = store;
 
-  final BillingTokenStore _store;
+  final BillingSessionStore _store;
 
   BillingTokenPayload? get payload => BillingSdk.getPayload();
 
-  Future<void> initForAccount(String accountKey) async {
-    final token = await _store.readToken(accountKey);
-    BillingSdk.init(token);
+  BillingAccountSession? _cachedSession;
+  BillingAccountSession? get accountSession => _cachedSession;
+
+  /// Restores persisted session and license JWT for [accountKey].
+  Future<BillingAccountSession?> initForAccount(String accountKey) async {
+    final session = await _store.readAccountSession(accountKey);
+    _cachedSession = session;
+    if (session?.licenseJwt != null) {
+      BillingSdk.init(session!.licenseJwt);
+    } else {
+      final legacy = await _store.readToken(accountKey);
+      BillingSdk.init(legacy);
+    }
+    return session;
   }
 
-  Future<void> persistToken(String accountKey, String signedToken) async {
-    await _store.writeToken(accountKey, signedToken);
-    BillingSdk.init(signedToken);
+  /// Stores OAuth tokens after PKCE login (before license sync).
+  Future<BillingAccountSession> persistAuthTokens({
+    required String accountKey,
+    required BillingAuthTokens tokens,
+  }) async {
+    final profile = AuthUserProfile.fromAccessToken(tokens.accessToken);
+    final session = BillingAccountSession(
+      authTokens: tokens,
+      userProfile: profile,
+      updatedAt: DateTime.now().toUtc(),
+    );
+    await _store.writeAccountSession(accountKey, session);
+    _cachedSession = session;
+    return session;
+  }
+
+  Future<void> persistLicense({
+    required String accountKey,
+    required String licenseJwt,
+    BillingAccountSession? baseSession,
+  }) async {
+    BillingSdk.init(licenseJwt);
+    final payload = BillingSdk.getPayload();
+    final current = baseSession ?? _cachedSession;
+    if (current == null) {
+      await _store.writeToken(accountKey, licenseJwt);
+      return;
+    }
+    final updated = current.copyWith(
+      licenseJwt: licenseJwt,
+      licensePayload: payload,
+      updatedAt: DateTime.now().toUtc(),
+    );
+    await _writeSession(accountKey, updated, licenseJwt);
   }
 
   Future<void> clearAccount(String accountKey) async {
+    await _store.deleteAccountSession(accountKey);
     await _store.deleteToken(accountKey);
+    _cachedSession = null;
     BillingSdk.init(null);
   }
-
-  Future<String?> readPayingPartyContext(String accountKey) =>
-      _store.readPayingPartyContext(accountKey);
 
   Future<SessionVerifyOutcome> verifyOfflineToken({
     required String accountKey,
@@ -73,7 +121,19 @@ class BillingSession {
     final result = BillingSdk.verifyAndDecode(trimmed);
     switch (result) {
       case VerifySuccess():
-        await persistToken(accountKey, trimmed);
+        await _store.writeToken(accountKey, trimmed);
+        final current = _cachedSession;
+        if (current != null) {
+          await _writeSession(
+            accountKey,
+            current.copyWith(
+              licenseJwt: trimmed,
+              licensePayload: BillingSdk.getPayload(),
+              updatedAt: DateTime.now().toUtc(),
+            ),
+            trimmed,
+          );
+        }
         return const SessionVerifySuccess(
           'Token verified. Subscription data updated.',
         );
@@ -82,30 +142,17 @@ class BillingSession {
     }
   }
 
+  /// Online sync: bootstrap org context → fetch license JWT → persist session.
   Future<SessionSyncOutcome> syncOnlineForAccount({
     required String accountKey,
-    required String authorizationToken,
-    String rawPayingPartyContext = '',
+    String? accessToken,
     String? payingPartyId,
   }) async {
-    final authToken = authorizationToken.trim();
-    if (authToken.isEmpty || authToken == 'null') {
+    final authToken = (accessToken ?? _cachedSession?.accessToken ?? '').trim();
+    if (authToken.isEmpty) {
       return const SessionSyncFailure(
-        'No session token for this profile. Sign in again so billing can verify identity.',
+        'No access token. Sign in to billing and try again.',
       );
-    }
-
-    final payingPartyContext = parsePayingPartyContext(rawPayingPartyContext);
-    if (payingPartyContext == '') {
-      return const SessionSyncFailure(
-        'Enter a valid paying party email or a valid domain/URL.',
-      );
-    }
-
-    if (payingPartyContext == null) {
-      await _store.deletePayingPartyContext(accountKey);
-    } else {
-      await _store.writePayingPartyContext(accountKey, payingPartyContext);
     }
 
     final bootstrap = await BillingSdk.ensureBillingContext(
@@ -117,18 +164,70 @@ class BillingSession {
         error: bootstrap.error,
       );
     }
+    final stats = (bootstrap as BootstrapSuccess).stats;
 
     final result = await BillingSdk.syncFromServer(
       authorizationToken: authToken,
-      payingPartyId: payingPartyId,
+      payingPartyId: payingPartyId ?? _cachedSession?.payingPartyIdHeader,
     );
 
     switch (result) {
       case SyncSuccess(:final signedToken):
-        await persistToken(accountKey, signedToken);
-        return const SessionSyncSuccess('Subscription data updated.');
+        BillingSdk.init(signedToken);
+        final payload = BillingSdk.getPayload();
+        final tokens = _cachedSession?.authTokens ??
+            BillingAuthTokens(accessToken: authToken);
+        final profile = _cachedSession?.userProfile ??
+            AuthUserProfile.fromAccessToken(authToken);
+        final session = BillingAccountSession(
+          authTokens: tokens,
+          userProfile: profile,
+          billingStats: stats,
+          licenseJwt: signedToken,
+          licensePayload: payload,
+          payingPartyIdHeader:
+              payingPartyId ?? _cachedSession?.payingPartyIdHeader,
+          updatedAt: DateTime.now().toUtc(),
+        );
+        await _writeSession(accountKey, session, signedToken);
+        return SessionSyncSuccess(session);
       case SyncFailure(:final message, :final error):
         return SessionSyncFailure(message, error: error);
     }
+  }
+
+  /// Refreshes OAuth tokens and re-runs [syncOnlineForAccount].
+  Future<SessionSyncOutcome> refreshAndSync({
+    required String accountKey,
+    required Future<BillingAuthTokens> Function(String refreshToken) refresh,
+  }) async {
+    final current = _cachedSession ?? await _store.readAccountSession(accountKey);
+    final refreshToken = current?.authTokens.refreshToken;
+    if (refreshToken == null || refreshToken.isEmpty) {
+      return const SessionSyncFailure(
+        'Session expired. Sign in again to sync billing.',
+      );
+    }
+    try {
+      final tokens = await refresh(refreshToken);
+      await persistAuthTokens(accountKey: accountKey, tokens: tokens);
+      return syncOnlineForAccount(
+        accountKey: accountKey,
+        accessToken: tokens.accessToken,
+        payingPartyId: current?.payingPartyIdHeader,
+      );
+    } catch (e) {
+      return SessionSyncFailure('Could not refresh session. Sign in again.');
+    }
+  }
+
+  Future<void> _writeSession(
+    String accountKey,
+    BillingAccountSession session,
+    String licenseJwt,
+  ) async {
+    await _store.writeAccountSession(accountKey, session);
+    await _store.writeToken(accountKey, licenseJwt);
+    _cachedSession = session;
   }
 }

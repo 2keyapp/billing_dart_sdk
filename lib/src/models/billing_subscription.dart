@@ -11,7 +11,12 @@ class BillingSubscription {
     required this.productName,
     required this.subscriptionStatus,
     required this.validUntil,
+    this.validFrom,
+    this.billingInterval,
     this.addonCode,
+    this.usingPartyIdentityProvider,
+    this.usingPartyIdentitySubject,
+    this.usingPartyEmail,
     this.assignedUserPartyId,
   });
 
@@ -22,8 +27,12 @@ class BillingSubscription {
   final String productName;
   final String subscriptionStatus;
   final DateTime validUntil;
-  /// Stable add-on code from billing (`linux`, `ai_assistant`, …).
+  final DateTime? validFrom;
+  final String? billingInterval;
   final String? addonCode;
+  final String? usingPartyIdentityProvider;
+  final String? usingPartyIdentitySubject;
+  final String? usingPartyEmail;
   final String? assignedUserPartyId;
 
   /// Parses from subscription object in JWT payload. Throws [FormatException] if invalid.
@@ -52,12 +61,27 @@ class BillingSubscription {
       throw FormatException(
         'subscriptions[].valid_until required (Unix timestamp).',
       );
+    final validFromRaw = getKey(json, 'valid_from', 'validFrom');
+    final validFromInt = parseInt(validFromRaw);
+    final billingIntervalRaw =
+        getKey(json, 'billing_interval', 'billingInterval');
     final assigned = getKey(
       json,
       'assigned_user_party_id',
       'assignedUserPartyId',
     );
-    final addonCodeRaw = getKey(json, 'addon_code', 'addonCode');
+    final addon = getKey(json, 'addon_code', 'addonCode');
+    final usingProvider = getKey(
+      json,
+      'using_party_identity_provider',
+      'usingPartyIdentityProvider',
+    );
+    final usingSubject = getKey(
+      json,
+      'using_party_identity_subject',
+      'usingPartyIdentitySubject',
+    );
+    final usingEmail = getKey(json, 'using_party_email', 'usingPartyEmail');
     return BillingSubscription(
       subscriptionId: subscriptionId,
       planId: planId,
@@ -66,27 +90,36 @@ class BillingSubscription {
       productName: productName,
       subscriptionStatus: status,
       validUntil: dateTimeFromUnixSeconds(validUntilInt),
-      addonCode: addonCodeRaw is String && addonCodeRaw.isNotEmpty
-          ? addonCodeRaw
+      validFrom: validFromInt != null
+          ? dateTimeFromUnixSeconds(validFromInt)
           : null,
-      assignedUserPartyId:
-          assigned is String && assigned.isNotEmpty ? assigned : null,
+      billingInterval: billingIntervalRaw is String &&
+              billingIntervalRaw.trim().isNotEmpty
+          ? billingIntervalRaw.trim()
+          : null,
+      addonCode: addon is String && addon.isNotEmpty ? addon : null,
+      usingPartyIdentityProvider:
+          usingProvider is String && usingProvider.isNotEmpty ? usingProvider : null,
+      usingPartyIdentitySubject:
+          usingSubject is String && usingSubject.isNotEmpty ? usingSubject : null,
+      usingPartyEmail: usingEmail is String && usingEmail.isNotEmpty ? usingEmail : null,
+      assignedUserPartyId: assigned is String && assigned.isNotEmpty
+          ? assigned
+          : null,
     );
-  }
-
-  /// Matches a catalog add-on id (stable code or numeric billing plan id).
-  bool matchesAddonRef(String addonRef) {
-    final target = addonRef.trim().toLowerCase();
-    if (target.isEmpty) return false;
-    if (planId.toLowerCase() == target) return true;
-    if (addonCode?.toLowerCase() == target) return true;
-    return false;
   }
 
   /// Whether this subscription is currently active (e.g. active, trialing).
   bool get isActive =>
       subscriptionStatus.toLowerCase() == 'active' ||
       subscriptionStatus.toLowerCase() == 'trialing';
+
+  /// Whether [addonRef] matches server [addonCode] metadata.
+  bool matchesAddonRef(String addonRef) {
+    final code = addonCode;
+    if (code == null || code.isEmpty) return false;
+    return code.toLowerCase() == addonRef.trim().toLowerCase();
+  }
 
   /// Whether the validity period has ended (now > valid_until).
   bool get isPeriodEnded => DateTime.now().isAfter(validUntil);
