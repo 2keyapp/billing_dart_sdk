@@ -10,7 +10,7 @@ A Flutter example app is included for local development and manual testing.
 
 | Concern | SDK surface |
 |--------|-------------|
-| Login | `BillingAuthClient` — PKCE OAuth against `/api/auth` |
+| Login | `BillingAuthClient` — PKCE OAuth + discovery (`oauth-providers`, OIDC config) |
 | Session | `BillingSession` — persist auth + license, online sync, offline verify |
 | License | `BillingSdk.syncFromServer` → `GET /api/v1/license` |
 | Bootstrap | `BillingSdk.ensureBillingContext` → `GET /api/v1/subscriptions/me` |
@@ -62,7 +62,7 @@ final pkce = BillingPkceRequest.create(
   redirectUri: 'myapp://auth/callback',
 );
 
-// Open auth.buildAuthorizeUrl(...) in browser; user returns with ?code=...
+// Open auth.buildAuthorizeUrl(..., loginProvider: 'google') in browser; user returns with ?code=...
 final tokens = await auth.exchangeAuthorizationCode(
   code: authorizationCode,
   redirectUri: pkce.redirectUri,
@@ -71,6 +71,27 @@ final tokens = await auth.exchangeAuthorizationCode(
 ```
 
 Use `tokens.accessToken` (audience `billing`) for sync — not raw Google/Microsoft IdP tokens.
+
+Embedded/native clients should pass `loginProvider: 'google'` or `'microsoft'` on `buildAuthorizeUrl` so the server skips its `/login` chooser and redirects straight to the IdP.
+
+### Discover enabled login options
+
+Before showing a login screen, fetch what the server supports:
+
+```dart
+final auth = BillingAuthClient(billingBaseUrl: 'https://billing.example.com');
+
+// Option A: provider list only (google / microsoft / email)
+final providers = await auth.fetchOAuthProviders();
+if (providers.isGoogleEnabled) { /* show Google button */ }
+if (providers.isEmailEnabled) { /* show email form */ }
+
+// Option B: full discovery (providers + OIDC endpoints)
+final discovery = await auth.discover();
+final authorizeEndpoint = discovery.openId.authorizationEndpoint;
+```
+
+Public endpoints (no auth): `GET /api/auth/.well-known/oauth-providers` and `GET /api/auth/.well-known/openid-configuration`.
 
 ### 3. Session + sync
 

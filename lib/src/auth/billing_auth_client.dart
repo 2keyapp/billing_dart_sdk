@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import '../api/billing_api_client.dart';
 import '../logging/sdk_logger.dart';
 import 'billing_auth_tokens.dart';
+import 'billing_auth_discovery.dart';
 import 'pkce.dart';
 
 /// PKCE OAuth client for billing embedded auth at `/api/auth`.
@@ -27,7 +28,60 @@ class BillingAuthClient {
     return '${base}api/auth';
   }
 
+  /// GET `/api/auth/.well-known/oauth-providers` — which login methods are enabled.
+  Future<BillingOAuthProvidersDocument> fetchOAuthProviders() async {
+    final uri = Uri.parse('$authBaseUrl/.well-known/oauth-providers');
+    BillingSdkLogger.info('BillingAuthClient: GET oauth-providers');
+    final response = await _http.get(uri);
+    if (response.statusCode != 200) {
+      throw BillingAuthException(
+        'Could not load auth providers (HTTP ${response.statusCode}).',
+        statusCode: response.statusCode,
+        responseBody: response.body,
+      );
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw const BillingAuthException('Invalid oauth-providers response.');
+    }
+    return BillingOAuthProvidersDocument.fromJson(decoded);
+  }
+
+  /// GET `/api/auth/.well-known/openid-configuration` — OIDC discovery document.
+  Future<BillingOpenIdConfiguration> fetchOpenIdConfiguration() async {
+    final uri = Uri.parse('$authBaseUrl/.well-known/openid-configuration');
+    BillingSdkLogger.info('BillingAuthClient: GET openid-configuration');
+    final response = await _http.get(uri);
+    if (response.statusCode != 200) {
+      throw BillingAuthException(
+        'Could not load OpenID configuration (HTTP ${response.statusCode}).',
+        statusCode: response.statusCode,
+        responseBody: response.body,
+      );
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw const BillingAuthException('Invalid openid-configuration response.');
+    }
+    return BillingOpenIdConfiguration.fromJson(decoded);
+  }
+
+  /// Loads provider list and OIDC config together for login UI bootstrap.
+  Future<BillingAuthDiscovery> discover() async {
+    final results = await Future.wait([
+      fetchOAuthProviders(),
+      fetchOpenIdConfiguration(),
+    ]);
+    return BillingAuthDiscovery(
+      providers: results[0] as BillingOAuthProvidersDocument,
+      openId: results[1] as BillingOpenIdConfiguration,
+    );
+  }
+
   /// Builds the browser authorize URL for PKCE login.
+  ///
+  /// Pass [loginProvider] (`google`, `microsoft`, `email`) so embedded clients
+  /// skip the server `/login` chooser and go straight to the IdP.
   Uri buildAuthorizeUrl({
     required String redirectUri,
     required String state,
@@ -35,6 +89,7 @@ class BillingAuthClient {
     String? scope,
     String? deviceId,
     String? platform,
+    String? loginProvider,
   }) {
     final verifier = codeVerifier ?? generatePkceVerifier();
     final challenge = pkceChallengeS256(verifier);
@@ -48,6 +103,8 @@ class BillingAuthClient {
       'code_challenge_method': 'S256',
       if (deviceId != null && deviceId.isNotEmpty) 'device_id': deviceId,
       if (platform != null && platform.isNotEmpty) 'platform': platform,
+      if (loginProvider != null && loginProvider.isNotEmpty)
+        'login_provider': loginProvider,
     };
     return Uri.parse('$authBaseUrl/authorize').replace(queryParameters: params);
   }
@@ -82,7 +139,11 @@ class BillingAuthClient {
     final response = await _http.post(
       uri,
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'refresh_token': refreshToken}),
+      body: jsonEncode({
+        'grant_type': 'refresh_token',
+        'refresh_token': refreshToken,
+        'client_id': clientId,
+      }),
     );
     BillingSdkLogger.info('BillingAuthClient: POST refresh');
     return _parseTokenResponse(response);
