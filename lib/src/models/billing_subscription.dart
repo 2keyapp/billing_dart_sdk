@@ -11,6 +11,8 @@ class BillingSubscription {
     required this.productName,
     required this.subscriptionStatus,
     required this.validUntil,
+    this.validFrom,
+    this.billingInterval,
     this.addonCode,
     this.usingPartyIdentityProvider,
     this.usingPartyIdentitySubject,
@@ -25,6 +27,8 @@ class BillingSubscription {
   final String productName;
   final String subscriptionStatus;
   final DateTime validUntil;
+  final DateTime? validFrom;
+  final String? billingInterval;
   final String? addonCode;
   final String? usingPartyIdentityProvider;
   final String? usingPartyIdentitySubject;
@@ -57,6 +61,10 @@ class BillingSubscription {
       throw FormatException(
         'subscriptions[].valid_until required (Unix timestamp).',
       );
+    final validFromRaw = getKey(json, 'valid_from', 'validFrom');
+    final validFromInt = parseInt(validFromRaw);
+    final billingIntervalRaw =
+        getKey(json, 'billing_interval', 'billingInterval');
     final assigned = getKey(
       json,
       'assigned_user_party_id',
@@ -82,6 +90,13 @@ class BillingSubscription {
       productName: productName,
       subscriptionStatus: status,
       validUntil: dateTimeFromUnixSeconds(validUntilInt),
+      validFrom: validFromInt != null
+          ? dateTimeFromUnixSeconds(validFromInt)
+          : null,
+      billingInterval: billingIntervalRaw is String &&
+              billingIntervalRaw.trim().isNotEmpty
+          ? billingIntervalRaw.trim()
+          : null,
       addonCode: addon is String && addon.isNotEmpty ? addon : null,
       usingPartyIdentityProvider:
           usingProvider is String && usingProvider.isNotEmpty ? usingProvider : null,
