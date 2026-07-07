@@ -68,7 +68,10 @@ class BillingSession {
 
   /// Restores persisted session and license JWT for [accountKey].
   Future<BillingAccountSession?> initForAccount(String accountKey) async {
-    final session = await _store.readAccountSession(accountKey);
+    var session = await _store.readAccountSession(accountKey);
+    if (session != null) {
+      session = await _refreshProfileFromTokens(accountKey, session);
+    }
     _cachedSession = session;
     if (session?.licenseJwt != null) {
       BillingSdk.init(session!.licenseJwt);
@@ -84,7 +87,10 @@ class BillingSession {
     required String accountKey,
     required BillingAuthTokens tokens,
   }) async {
-    final profile = AuthUserProfile.fromAccessToken(tokens.accessToken);
+    final profile = AuthUserProfile.fromTokens(
+      accessToken: tokens.accessToken,
+      idToken: tokens.idToken,
+    );
     final session = BillingAccountSession(
       authTokens: tokens,
       userProfile: profile,
@@ -274,7 +280,10 @@ class BillingSession {
     final tokens = _cachedSession?.authTokens ??
         BillingAuthTokens(accessToken: authToken);
     final profile = _cachedSession?.userProfile ??
-        AuthUserProfile.fromAccessToken(authToken);
+        AuthUserProfile.fromTokens(
+          accessToken: authToken,
+          idToken: _cachedSession?.authTokens.idToken,
+        );
 
     switch (result) {
       case SyncNotModified(:final etag):
@@ -349,6 +358,31 @@ class BillingSession {
     _pollTimer = Timer.periodic(_pollInterval, (_) {
       unawaited(_pollTick(key));
     });
+  }
+
+  Future<BillingAccountSession> _refreshProfileFromTokens(
+    String accountKey,
+    BillingAccountSession session,
+  ) async {
+    try {
+      final merged = AuthUserProfile.fromTokens(
+        accessToken: session.authTokens.accessToken,
+        idToken: session.authTokens.idToken,
+      );
+      if (merged.email == session.userProfile.email &&
+          merged.name == session.userProfile.name &&
+          merged.picture == session.userProfile.picture) {
+        return session;
+      }
+      final updated = session.copyWith(
+        userProfile: merged,
+        updatedAt: DateTime.now().toUtc(),
+      );
+      await _store.writeAccountSession(accountKey, updated);
+      return updated;
+    } catch (_) {
+      return session;
+    }
   }
 
   Future<void> _writeSession(

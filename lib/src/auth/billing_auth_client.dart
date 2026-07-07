@@ -13,7 +13,8 @@ class BillingAuthClient {
   BillingAuthClient({
     required String billingBaseUrl,
     this.clientId = 'billing_portal_web',
-    this.defaultScope = 'openid profile email',
+    this.defaultScope = 'openid profile email offline_access',
+    this.apiAudience = 'billing',
     http.Client? httpClient,
   }) : _origin = normalizeBillingApiBaseUrl(billingBaseUrl),
        _http = httpClient ?? http.Client();
@@ -21,6 +22,7 @@ class BillingAuthClient {
   final String _origin;
   final String clientId;
   final String defaultScope;
+  final String apiAudience;
   final http.Client _http;
 
   String get authBaseUrl {
@@ -105,8 +107,15 @@ class BillingAuthClient {
       if (platform != null && platform.isNotEmpty) 'platform': platform,
       if (loginProvider != null && loginProvider.isNotEmpty)
         'login_provider': loginProvider,
+      if (apiAudience.isNotEmpty) 'resource': apiAudience,
     };
     return Uri.parse('$authBaseUrl/authorize').replace(queryParameters: params);
+  }
+
+  String resolveTokenEndpoint({String? tokenEndpoint}) {
+    final configured = tokenEndpoint?.trim();
+    if (configured != null && configured.isNotEmpty) return configured;
+    return '$authBaseUrl/oauth2/token';
   }
 
   /// Exchanges an authorization code for access + refresh tokens.
@@ -115,37 +124,44 @@ class BillingAuthClient {
     required String redirectUri,
     required String codeVerifier,
     String? deviceId,
+    String? tokenEndpoint,
   }) async {
-    final uri = Uri.parse('$authBaseUrl/token');
-    final headers = <String, String>{'Content-Type': 'application/json'};
-    if (deviceId != null && deviceId.isNotEmpty) {
-      headers['X-Uids-Device-Id'] = deviceId;
-    }
-    final body = jsonEncode({
+    final uri = Uri.parse(resolveTokenEndpoint(tokenEndpoint: tokenEndpoint));
+    final body = <String, String>{
       'grant_type': 'authorization_code',
       'code': code,
       'client_id': clientId,
       'redirect_uri': redirectUri,
       'code_verifier': codeVerifier,
-    });
+      if (apiAudience.isNotEmpty) 'resource': apiAudience,
+    };
     BillingSdkLogger.info('BillingAuthClient: POST token (code exchange)');
-    final response = await _http.post(uri, headers: headers, body: body);
+    final response = await _http.post(
+      uri,
+      headers: _tokenRequestHeaders(deviceId: deviceId),
+      body: _encodeFormBody(body),
+    );
     return _parseTokenResponse(response);
   }
 
   /// Rotates access + refresh tokens.
-  Future<BillingAuthTokens> refreshTokens(String refreshToken) async {
-    final uri = Uri.parse('$authBaseUrl/refresh');
+  Future<BillingAuthTokens> refreshTokens(
+    String refreshToken, {
+    String? tokenEndpoint,
+  }) async {
+    final uri = Uri.parse(resolveTokenEndpoint(tokenEndpoint: tokenEndpoint));
+    final body = <String, String>{
+      'grant_type': 'refresh_token',
+      'refresh_token': refreshToken,
+      'client_id': clientId,
+      if (apiAudience.isNotEmpty) 'resource': apiAudience,
+    };
+    BillingSdkLogger.info('BillingAuthClient: POST refresh');
     final response = await _http.post(
       uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'grant_type': 'refresh_token',
-        'refresh_token': refreshToken,
-        'client_id': clientId,
-      }),
+      headers: _tokenRequestHeaders(),
+      body: _encodeFormBody(body),
     );
-    BillingSdkLogger.info('BillingAuthClient: POST refresh');
     return _parseTokenResponse(response);
   }
 
@@ -175,6 +191,20 @@ class BillingAuthClient {
     }
     return BillingAuthTokens.fromJson(decoded);
   }
+
+  Map<String, String> _tokenRequestHeaders({String? deviceId}) {
+    final headers = <String, String>{
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Accept': 'application/json',
+    };
+    if (deviceId != null && deviceId.isNotEmpty) {
+      headers['X-Uids-Device-Id'] = deviceId;
+    }
+    return headers;
+  }
+
+  String _encodeFormBody(Map<String, String> fields) =>
+      Uri(queryParameters: fields).query;
 
   void close() => _http.close();
 }

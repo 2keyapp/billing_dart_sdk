@@ -84,6 +84,8 @@ class BillingAccountSession {
         'userProfile': {
           'subject': userProfile.subject,
           if (userProfile.email != null) 'email': userProfile.email,
+          if (userProfile.name != null) 'name': userProfile.name,
+          if (userProfile.picture != null) 'picture': userProfile.picture,
           'emailVerified': userProfile.emailVerified,
           if (userProfile.identityProvider != null)
             'identityProvider': userProfile.identityProvider,
@@ -116,18 +118,31 @@ class BillingAccountSession {
     }
     final tokens = BillingAuthTokens.fromJson(authRaw);
     final profileRaw = json['userProfile'] ?? json['user_profile'];
-    final profile = profileRaw is Map<String, dynamic>
-        ? AuthUserProfile(
-            subject: '${profileRaw['subject']}',
-            email: profileRaw['email'] as String?,
-            emailVerified: profileRaw['emailVerified'] == true,
-            identityProvider: profileRaw['identityProvider'] as String?,
-            audience: profileRaw['audience'] as String?,
-            issuer: profileRaw['issuer'] as String?,
-            clientId: profileRaw['clientId'] as String?,
-            scope: profileRaw['scope'] as String?,
-          )
-        : AuthUserProfile.fromAccessToken(tokens.accessToken);
+    AuthUserProfile profile;
+    try {
+      profile = AuthUserProfile.fromTokens(
+        accessToken: tokens.accessToken,
+        idToken: tokens.idToken,
+      );
+    } catch (_) {
+      profile = profileRaw is Map<String, dynamic>
+          ? AuthUserProfile(
+              subject: '${profileRaw['subject']}',
+              email: profileRaw['email'] as String?,
+              name: profileRaw['name'] as String?,
+              picture: profileRaw['picture'] as String?,
+              emailVerified: profileRaw['emailVerified'] == true,
+              identityProvider: profileRaw['identityProvider'] as String?,
+              audience: profileRaw['audience'] as String?,
+              issuer: profileRaw['issuer'] as String?,
+              clientId: profileRaw['clientId'] as String?,
+              scope: profileRaw['scope'] as String?,
+            )
+          : AuthUserProfile.fromTokens(
+              accessToken: tokens.accessToken,
+              idToken: tokens.idToken,
+            );
+    }
 
     PayingPartyBillingStats? stats;
     final statsRaw = json['billingStats'] ?? json['billing_stats'];
