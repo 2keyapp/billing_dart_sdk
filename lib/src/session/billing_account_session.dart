@@ -11,7 +11,9 @@ class BillingAccountSession {
     this.billingStats,
     this.licenseJwt,
     this.licensePayload,
+    this.licenseEtag,
     this.payingPartyIdHeader,
+    this.lastLicenseSyncAt,
     this.updatedAt,
   });
 
@@ -20,7 +22,10 @@ class BillingAccountSession {
   final PayingPartyBillingStats? billingStats;
   final String? licenseJwt;
   final BillingTokenPayload? licensePayload;
+  /// HTTP ETag from the last successful `GET /api/v1/license` response.
+  final String? licenseEtag;
   final String? payingPartyIdHeader;
+  final DateTime? lastLicenseSyncAt;
   final DateTime? updatedAt;
 
   String get accessToken => authTokens.accessToken;
@@ -57,7 +62,9 @@ class BillingAccountSession {
     PayingPartyBillingStats? billingStats,
     String? licenseJwt,
     BillingTokenPayload? licensePayload,
+    String? licenseEtag,
     String? payingPartyIdHeader,
+    DateTime? lastLicenseSyncAt,
     DateTime? updatedAt,
   }) =>
       BillingAccountSession(
@@ -66,7 +73,9 @@ class BillingAccountSession {
         billingStats: billingStats ?? this.billingStats,
         licenseJwt: licenseJwt ?? this.licenseJwt,
         licensePayload: licensePayload ?? this.licensePayload,
+        licenseEtag: licenseEtag ?? this.licenseEtag,
         payingPartyIdHeader: payingPartyIdHeader ?? this.payingPartyIdHeader,
+        lastLicenseSyncAt: lastLicenseSyncAt ?? this.lastLicenseSyncAt,
         updatedAt: updatedAt ?? this.updatedAt,
       );
 
@@ -75,6 +84,8 @@ class BillingAccountSession {
         'userProfile': {
           'subject': userProfile.subject,
           if (userProfile.email != null) 'email': userProfile.email,
+          if (userProfile.name != null) 'name': userProfile.name,
+          if (userProfile.picture != null) 'picture': userProfile.picture,
           'emailVerified': userProfile.emailVerified,
           if (userProfile.identityProvider != null)
             'identityProvider': userProfile.identityProvider,
@@ -93,7 +104,10 @@ class BillingAccountSession {
             'hasAssignedSeatForIdentity': billingStats!.hasAssignedSeatForIdentity,
           },
         if (licenseJwt != null) 'licenseJwt': licenseJwt,
+        if (licenseEtag != null) 'licenseEtag': licenseEtag,
         if (payingPartyIdHeader != null) 'payingPartyIdHeader': payingPartyIdHeader,
+        if (lastLicenseSyncAt != null)
+          'lastLicenseSyncAt': lastLicenseSyncAt!.toUtc().toIso8601String(),
         if (updatedAt != null) 'updatedAt': updatedAt!.toUtc().toIso8601String(),
       };
 
@@ -104,18 +118,31 @@ class BillingAccountSession {
     }
     final tokens = BillingAuthTokens.fromJson(authRaw);
     final profileRaw = json['userProfile'] ?? json['user_profile'];
-    final profile = profileRaw is Map<String, dynamic>
-        ? AuthUserProfile(
-            subject: '${profileRaw['subject']}',
-            email: profileRaw['email'] as String?,
-            emailVerified: profileRaw['emailVerified'] == true,
-            identityProvider: profileRaw['identityProvider'] as String?,
-            audience: profileRaw['audience'] as String?,
-            issuer: profileRaw['issuer'] as String?,
-            clientId: profileRaw['clientId'] as String?,
-            scope: profileRaw['scope'] as String?,
-          )
-        : AuthUserProfile.fromAccessToken(tokens.accessToken);
+    AuthUserProfile profile;
+    try {
+      profile = AuthUserProfile.fromTokens(
+        accessToken: tokens.accessToken,
+        idToken: tokens.idToken,
+      );
+    } catch (_) {
+      profile = profileRaw is Map<String, dynamic>
+          ? AuthUserProfile(
+              subject: '${profileRaw['subject']}',
+              email: profileRaw['email'] as String?,
+              name: profileRaw['name'] as String?,
+              picture: profileRaw['picture'] as String?,
+              emailVerified: profileRaw['emailVerified'] == true,
+              identityProvider: profileRaw['identityProvider'] as String?,
+              audience: profileRaw['audience'] as String?,
+              issuer: profileRaw['issuer'] as String?,
+              clientId: profileRaw['clientId'] as String?,
+              scope: profileRaw['scope'] as String?,
+            )
+          : AuthUserProfile.fromTokens(
+              accessToken: tokens.accessToken,
+              idToken: tokens.idToken,
+            );
+    }
 
     PayingPartyBillingStats? stats;
     final statsRaw = json['billingStats'] ?? json['billing_stats'];
@@ -136,12 +163,16 @@ class BillingAccountSession {
     }
 
     final updatedRaw = json['updatedAt'] ?? json['updated_at'];
+    final lastSyncRaw = json['lastLicenseSyncAt'] ?? json['last_license_sync_at'];
     return BillingAccountSession(
       authTokens: tokens,
       userProfile: profile,
       billingStats: stats,
       licenseJwt: json['licenseJwt'] as String? ?? json['license_jwt'] as String?,
+      licenseEtag: json['licenseEtag'] as String? ?? json['license_etag'] as String?,
       payingPartyIdHeader: json['payingPartyIdHeader'] as String?,
+      lastLicenseSyncAt:
+          lastSyncRaw is String ? DateTime.tryParse(lastSyncRaw) : null,
       updatedAt: updatedRaw is String ? DateTime.tryParse(updatedRaw) : null,
     );
   }

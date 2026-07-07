@@ -4,6 +4,8 @@ Dart SDK for **using-party client apps** (e.g. Scomm): embedded billing auth, li
 
 A Flutter example app is included for local development and manual testing.
 
+**Architecture & roadmap:** [billing/LICENSE_SYNC_AND_SDK_PLAN.md](../billing/LICENSE_SYNC_AND_SDK_PLAN.md)
+
 ---
 
 ## What this SDK does
@@ -11,14 +13,15 @@ A Flutter example app is included for local development and manual testing.
 | Concern | SDK surface |
 |--------|-------------|
 | Login | `BillingAuthClient` — PKCE OAuth + discovery (`oauth-providers`, OIDC config) |
-| Session | `BillingSession` — persist auth + license, online sync, offline verify |
-| License | `BillingSdk.syncFromServer` → `GET /api/v1/license` |
+| Session | `BillingSession` — persist auth + license, online sync, **polling**, offline verify |
+| License | `BillingSdk.syncFromServer` → `GET /api/v1/license` (supports **ETag** / **304**) |
 | Bootstrap | `BillingSdk.ensureBillingContext` → `GET /api/v1/subscriptions/me` |
 | Offline | `BillingSdk.init` / `verifyAndDecode` — ES256 license JWT verify |
 | Entitlements | `BillingSdk.getPayload()` — subscriptions, add-ons from JWT |
 | Catalog | `BillingSdk.fetchPlanCatalog()` — public monthly/annual plans |
+| Polling | `startLicensePolling` (6h), `onAppForeground`, `shouldPollLicenseEntitlements` |
 
-**Paying-party portal** access is separate; the server validates portal users. The SDK exposes `BillingAccountSession.canOpenBillingPortal` when the authenticated identity owns the org.
+**Paying-party portal** is a separate web app (`billing-portal`). The SDK exposes `BillingAccountSession.canOpenBillingPortal` when the authenticated identity owns the org.
 
 ---
 
@@ -117,6 +120,25 @@ On next launch:
 await session.initForAccount(userId); // restores license JWT → BillingSdk.getPayload()
 ```
 
+### 3b. Background polling + foreground refresh
+
+After login, register polling once. It **only runs when the user has entitlements** (assigned seat or subscriptions in the license). Manual sync always works.
+
+```dart
+session.startLicensePolling(accountKey: userId); // default: every 6 hours
+
+// When the app returns to foreground (WidgetsBindingObserver):
+await session.onAppForeground(accountKey: userId);
+
+// Manual "Sync billing" — always fetches a fresh license:
+await session.syncOnlineForAccount(accountKey: userId);
+
+// Conditional check (ETag / HTTP 304) — used by polling and foreground:
+await session.syncIfLicenseChanged(accountKey: userId);
+```
+
+`GET /api/v1/license` supports `If-None-Match` with an `ETag` derived from assigned-seat rows. Unchanged licenses return **304** (no KMS re-sign). The SDK stores `licenseEtag` on [BillingAccountSession].
+
 ### 4. Offline / paste
 
 ```dart
@@ -152,8 +174,25 @@ final catalog = await BillingSdk.fetchPlanCatalog(productId: 1);
 final result = await BillingSdk.syncFromServer(
   authorizationToken: tokens.accessToken,
   payingPartyId: null, // optional X-Paying-Party-Id for multi-org
+  ifNoneMatch: storedEtag, // optional — omit for always-fresh (manual sync)
 );
 ```
+
+---
+
+## Better Auth alignment (in progress)
+
+The **billing portal** is the reference OAuth client. This SDK’s `BillingAuthClient` still needs parity:
+
+| Gap | Target (match portal) |
+|-----|------------------------|
+| Scope | Add `offline_access` |
+| Audience | `resource=billing` on authorize + token + refresh |
+| Token request | `application/x-www-form-urlencoded` |
+| Social login | `POST /sign-in/social` + oauth-resume flow |
+| Client ID | Configurable (native apps need their own Better Auth client) |
+
+Planned extraction: reusable **`better_auth_client`** Dart package. See **[LICENSE_SYNC_AND_SDK_PLAN.md](../billing/LICENSE_SYNC_AND_SDK_PLAN.md)** §7.
 
 ---
 
@@ -170,9 +209,11 @@ final result = await BillingSdk.syncFromServer(
 
 ## Important
 
-- **Two token types** — OAuth **access token** (API auth) vs **license JWT** (offline entitlements). The SDK verifies the license JWT locally; access tokens are sent as `Authorization: Bearer`.
-- **Persistence** — Use `BillingSession` + `BillingSessionStore` for auth tokens, license JWT, and account context. `BillingSdk.init` only loads into memory.
-- **Scope** — This SDK does not wrap checkout, invoices, seat management, or other portal APIs. Call those from the portal or integrate separately if needed.
+- **Two token types** — OAuth **access token** (API auth, short-lived) vs **license JWT** (offline entitlements, signed by KMS). The SDK verifies the license JWT locally; access tokens are sent as `Authorization: Bearer`.
+- **License sync** — Server returns **ETag**; conditional requests avoid re-signing when seats unchanged. JWT `exp` (default 24h) is separate from per-subscription `valid_until` (paid period end).
+- **Polling** — Only runs when user has entitlements; manual sync always available.
+- **Persistence** — Use `BillingSession` + `BillingSessionStore` for auth tokens, license JWT, etag, and account context. `BillingSdk.init` only loads into memory.
+- **Scope** — This SDK does not wrap checkout, invoices, seat management, or other portal APIs.
 
 ---
 
@@ -184,4 +225,5 @@ flutter test
 flutter run   # Flutter example app
 ```
 
-- **[PLAN.md](PLAN.md)** — development plan and API alignment notes.
+- **[PLAN.md](PLAN.md)** — historical SDK design notes (partially superseded)
+- **[billing/LICENSE_SYNC_AND_SDK_PLAN.md](../billing/LICENSE_SYNC_AND_SDK_PLAN.md)** — current architecture, polling, Better Auth roadmap

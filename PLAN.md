@@ -1,24 +1,24 @@
 # Billing Flutter SDK – Development Plan
 
-This document is the single source of truth for the **Billing Flutter SDK**. The SDK is consumed by client-only apps (e.g. Scomm Flutter app); the only server is the Billing API.
+> **Note:** For the **current** architecture (license ETag, polling, seat lifecycle, Better Auth roadmap), see **[billing/LICENSE_SYNC_AND_SDK_PLAN.md](../billing/LICENSE_SYNC_AND_SDK_PLAN.md)**. This file retains historical design context; sections marked **IMPLEMENTED** reflect what ships today.
+
+This document describes the **Billing Dart SDK** consumed by client-only apps (e.g. Scomm Flutter app). The billing server is the source of truth.
 
 ---
 
-## 0. Build-time constants and “license” flow
+## 0. Build-time constants and license flow
 
-**Build-time constants** (SDK / app):
+**Implemented endpoints:**
 
-| Constant | Value |
-|----------|--------|
-| **BillingURL** | `billing.scomm.ai` (e.g. `https://billing.scomm.ai`) |
-| **PublicKeyID** | `t764` |
-| **PublicKeyValue** | RSA public key PEM (see Billing API doc `docs/BILLING_TOKEN_PAYLOAD.md` §0) |
+| Flow | API | SDK |
+|------|-----|-----|
+| Online sync | `GET /api/v1/license` (+ optional `If-None-Match`) | `BillingSdk.syncFromServer`, `BillingSession.syncOnlineForAccount` |
+| Conditional sync | `304` + `ETag` | `syncIfLicenseChanged`, polling, foreground |
+| Bootstrap | `GET /api/v1/subscriptions/me` | `BillingSdk.ensureBillingContext` |
+| Offline paste | — | `BillingSdk.verifyAndDecode` |
+| Init from storage | — | `BillingSdk.init`, `BillingSession.initForAccount` |
 
-**App “license” flow (metaphor):**
-
-- **GET /license (on startup):** App calls Billing API to get the license (signed JWT), then SDK parses it and keeps payload in memory. Requires Billing API to expose **GET /api/billing/license** (or **sdk-token**) with query `email` or `ssoId` – **not yet implemented** (only GET /api/billing/me exists today).
-- **POST /license:** User pastes license; SDK verifies and decodes (no server call). Implemented as SDK `verifyAndDecode(pastedString)`.
-- **SYNC /license:** Same as GET – call Billing URL to get fresh license; SDK verifies and updates in-memory. Same endpoint as GET /license.
+**Public key:** EC PEM (ES256) from `npm run license:export-public-key` on billing server — not RSA.
 
 ---
 
@@ -28,36 +28,25 @@ The SDK is responsible for the following:
 
 ---
 
-### 1.1 Init – Decode on app start and keep data in memory
+### 1.1 Init – Decode on app start and keep data in memory — **IMPLEMENTED**
 
-- **On app start**, the SDK provides an **init** method that:
-  - Takes the **saved signed JSON** (e.g. from secure storage, previously pasted and persisted by the app).
-  - **Decodes and verifies** it (signature + expiry) using the embedded public key.
-  - On success: **stores the decoded data in memory** so the rest of the app can use it for **add-on checks** (e.g. “does this user have addon X?”).
-- The app is responsible for **persisting** the raw token (e.g. after paste + verify in §1.3) and **passing** it into init on next launch. The SDK does not persist; it only decodes and holds in memory for the session.
-- **API (target):** e.g. `BillingSdk.init(String? savedSignedJson)` or `BillingSdk.initFromStorage(Future<String?> Function() readToken)`. After init, the dev accesses billing data via e.g. `BillingSdk.getPayload()` or `BillingSdk.currentPayload` for add-on checks. If `savedSignedJson` is null or invalid, init leaves state empty; the app can show “paste your billing token” or similar.
+- **On app start**, `BillingSdk.init(savedJwt)` and `BillingSession.initForAccount` decode and verify the saved license JWT (ES256).
+- App persists via `BillingSessionStore`; SDK holds `BillingTokenPayload` in memory for add-on checks.
 
 ---
 
-### 1.2 Sync online – API for syncing from the billing server (by user id)
+### 1.2 Sync online — **IMPLEMENTED** (+ polling)
 
-- There will be a **button in the UI** (e.g. “Sync billing”) that triggers a **sync from the billing server**.
-- The SDK must **expose an API** for this use case: **sync online** against the Billing API using a **unique identifier** for the user/mailbox (e.g. **user OID**, **SSO id**, or **email** – whatever the Billing API accepts).
-- Flow: app calls something like `BillingSdk.syncFromServer(uniqueId: String)` (or `BillingSdk.syncFromServer(userOid: String, ...)`). The SDK:
-  - Calls the Billing API (e.g. `GET /api/billing/me?ssoId=...` or similar endpoint that returns the signed JSON or billing payload for that user).
-  - On success: **verifies and decodes** the response, **updates in-memory state**, and optionally notifies the app so it can **persist** the new token if the API returns one.
-  - On failure: SDK exposes the error so the app can show an **error notification** with the failure cause.
-- The SDK needs a **base URL** (or client) for the Billing API, configurable at init or first use.
+- **Manual sync:** `BillingSession.syncOnlineForAccount` — Bearer access token → bootstrap → `GET /api/v1/license` (always fresh).
+- **Background:** `startLicensePolling` every 6h when `shouldPollLicenseEntitlements`; uses ETag / `304` when unchanged.
+- **Foreground:** `onAppForeground` → `syncIfLicenseChanged`.
+- Auth: Better Auth access token (`aud=billing`), not raw IdP tokens.
 
 ---
 
-### 1.3 Paste + verify – Serve and verify pasted JSON; expose data to save; errors as notifications
+### 1.3 Paste + verify — **IMPLEMENTED**
 
-- The SDK is responsible for **accepting the pasted JSON** (signed token), **verifying** it, and **exposing the decoded data** to the app so the app can **save** it (e.g. to secure storage for use in §1.1 on next launch).
-- **Success:** Decode succeeds → SDK returns the payload (or updates in-memory state and returns success); the app **saves** the raw token and/or payload for init and add-on checks.
-- **Failure:** If verification fails (invalid signature, expired, malformed) → SDK **does not** show UI itself; it **exposes the failure reason** so the **app** can show an **error notification** with the **failure cause** (e.g. “Token expired”, “Invalid signature”, “Malformed token”). The SDK provides a clear error type/message; the app is responsible for displaying it (e.g. snackbar, dialog, banner).
-
-**API (target):** e.g. `BillingSdk.verifyAndSavePastedToken(String pastedJson)` → `Result<BillingTokenPayload, BillingTokenError>` where `BillingTokenError` has a `message` or `cause` for the notification. Or: `verifyAndDecode(String)` returns payload or throws `BillingTokenException` with a user-facing `message`.
+- `BillingSdk.verifyAndDecode` / `BillingSession.verifyOfflineToken` — verify pasted JWT; app persists for next `init`.
 
 ---
 

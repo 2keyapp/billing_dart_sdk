@@ -124,12 +124,16 @@ class BillingSdk {
   static Future<SyncResult> syncFromServer({
     required String authorizationToken,
     String? payingPartyId,
+    String? ifNoneMatch,
   }) async {
     final result = await _apiClientOrThrow.fetchLicense(
       authorizationToken: authorizationToken,
       payingPartyId: payingPartyId,
+      ifNoneMatch: ifNoneMatch,
     );
     switch (result) {
+      case SyncNotModified():
+        return result;
       case SyncSuccess(:final signedToken):
         final verifyResult = _verifierOrThrow.verifyAndDecode(signedToken);
         switch (verifyResult) {
