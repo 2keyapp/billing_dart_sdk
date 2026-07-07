@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../api/billing_api_client.dart';
 import '../auth/auth_user_profile.dart';
 import '../auth/billing_auth_tokens.dart';
@@ -7,6 +9,7 @@ import '../models/billing_token_payload.dart';
 import '../billing_sdk.dart';
 import 'billing_account_session.dart';
 import 'billing_session_store.dart';
+import 'license_entitlements.dart';
 
 sealed class SessionSyncOutcome {
   const SessionSyncOutcome();
@@ -43,6 +46,9 @@ class SessionVerifyFailure extends SessionVerifyOutcome {
 /// **Using party (SDK app):** sync loads assigned subscriptions into the license JWT.
 /// **Paying party (portal):** [BillingAccountSession.canOpenBillingPortal] is true when
 /// the authenticated identity owns the org; portal validates server-side.
+///
+/// Periodic polling runs only when [shouldPollLicenseEntitlements] is true (assigned
+/// seat or subscriptions in the license). Manual [syncOnlineForAccount] always works.
 class BillingSession {
   BillingSession({required BillingSessionStore store}) : _store = store;
 
@@ -52,6 +58,13 @@ class BillingSession {
 
   BillingAccountSession? _cachedSession;
   BillingAccountSession? get accountSession => _cachedSession;
+
+  Timer? _pollTimer;
+  String? _pollingAccountKey;
+  Duration _pollInterval = defaultLicensePollInterval;
+  bool _pollInFlight = false;
+
+  bool get isLicensePollingActive => _pollTimer != null;
 
   /// Restores persisted session and license JWT for [accountKey].
   Future<BillingAccountSession?> initForAccount(String accountKey) async {
@@ -86,6 +99,7 @@ class BillingSession {
     required String accountKey,
     required String licenseJwt,
     BillingAccountSession? baseSession,
+    String? licenseEtag,
   }) async {
     BillingSdk.init(licenseJwt);
     final payload = BillingSdk.getPayload();
@@ -94,15 +108,20 @@ class BillingSession {
       await _store.writeToken(accountKey, licenseJwt);
       return;
     }
+    final now = DateTime.now().toUtc();
     final updated = current.copyWith(
       licenseJwt: licenseJwt,
       licensePayload: payload,
-      updatedAt: DateTime.now().toUtc(),
+      licenseEtag: licenseEtag,
+      lastLicenseSyncAt: now,
+      updatedAt: now,
     );
     await _writeSession(accountKey, updated, licenseJwt);
+    await _reconcileLicensePolling(accountKey);
   }
 
   Future<void> clearAccount(String accountKey) async {
+    stopLicensePolling();
     await _store.deleteAccountSession(accountKey);
     await _store.deleteToken(accountKey);
     _cachedSession = null;
@@ -142,58 +161,54 @@ class BillingSession {
     }
   }
 
-  /// Online sync: bootstrap org context → fetch license JWT → persist session.
+  /// Full online sync (always requests a fresh license). Use for manual "Sync billing".
   Future<SessionSyncOutcome> syncOnlineForAccount({
     required String accountKey,
     String? accessToken,
     String? payingPartyId,
-  }) async {
-    final authToken = (accessToken ?? _cachedSession?.accessToken ?? '').trim();
-    if (authToken.isEmpty) {
-      return const SessionSyncFailure(
-        'No access token. Sign in to billing and try again.',
+  }) =>
+      _syncLicenseForAccount(
+        accountKey: accountKey,
+        accessToken: accessToken,
+        payingPartyId: payingPartyId,
+        useCachedEtag: false,
       );
-    }
 
-    final bootstrap = await BillingSdk.ensureBillingContext(
-      authorizationToken: authToken,
-    );
-    if (bootstrap is BootstrapFailure) {
-      return SessionSyncFailure(
-        bootstrap.message,
-        error: bootstrap.error,
+  /// Conditional sync using stored ETag — for foreground resume and background polling.
+  Future<SessionSyncOutcome> syncIfLicenseChanged({
+    required String accountKey,
+    String? accessToken,
+    String? payingPartyId,
+  }) =>
+      _syncLicenseForAccount(
+        accountKey: accountKey,
+        accessToken: accessToken,
+        payingPartyId: payingPartyId,
+        useCachedEtag: true,
       );
-    }
-    final stats = (bootstrap as BootstrapSuccess).stats;
 
-    final result = await BillingSdk.syncFromServer(
-      authorizationToken: authToken,
-      payingPartyId: payingPartyId ?? _cachedSession?.payingPartyIdHeader,
-    );
+  /// Call when the host app returns to the foreground.
+  Future<SessionSyncOutcome?> onAppForeground({required String accountKey}) {
+    return syncIfLicenseChanged(accountKey: accountKey);
+  }
 
-    switch (result) {
-      case SyncSuccess(:final signedToken):
-        BillingSdk.init(signedToken);
-        final payload = BillingSdk.getPayload();
-        final tokens = _cachedSession?.authTokens ??
-            BillingAuthTokens(accessToken: authToken);
-        final profile = _cachedSession?.userProfile ??
-            AuthUserProfile.fromAccessToken(authToken);
-        final session = BillingAccountSession(
-          authTokens: tokens,
-          userProfile: profile,
-          billingStats: stats,
-          licenseJwt: signedToken,
-          licensePayload: payload,
-          payingPartyIdHeader:
-              payingPartyId ?? _cachedSession?.payingPartyIdHeader,
-          updatedAt: DateTime.now().toUtc(),
-        );
-        await _writeSession(accountKey, session, signedToken);
-        return SessionSyncSuccess(session);
-      case SyncFailure(:final message, :final error):
-        return SessionSyncFailure(message, error: error);
-    }
+  /// Starts periodic license checks. Polling is a no-op until entitlements exist.
+  void startLicensePolling({
+    required String accountKey,
+    Duration interval = defaultLicensePollInterval,
+  }) {
+    _pollingAccountKey = accountKey;
+    _pollInterval = interval;
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    unawaited(_reconcileLicensePolling(accountKey));
+  }
+
+  /// Stops background license polling.
+  void stopLicensePolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _pollingAccountKey = null;
   }
 
   /// Refreshes OAuth tokens and re-runs [syncOnlineForAccount].
@@ -219,6 +234,121 @@ class BillingSession {
     } catch (e) {
       return SessionSyncFailure('Could not refresh session. Sign in again.');
     }
+  }
+
+  Future<SessionSyncOutcome> _syncLicenseForAccount({
+    required String accountKey,
+    String? accessToken,
+    String? payingPartyId,
+    required bool useCachedEtag,
+  }) async {
+    final authToken = (accessToken ?? _cachedSession?.accessToken ?? '').trim();
+    if (authToken.isEmpty) {
+      return const SessionSyncFailure(
+        'No access token. Sign in to billing and try again.',
+      );
+    }
+
+    final bootstrap = await BillingSdk.ensureBillingContext(
+      authorizationToken: authToken,
+    );
+    if (bootstrap is BootstrapFailure) {
+      return SessionSyncFailure(
+        bootstrap.message,
+        error: bootstrap.error,
+      );
+    }
+    final stats = (bootstrap as BootstrapSuccess).stats;
+
+    final partyId = payingPartyId ?? _cachedSession?.payingPartyIdHeader;
+    final ifNoneMatch =
+        useCachedEtag ? _cachedSession?.licenseEtag : null;
+
+    final result = await BillingSdk.syncFromServer(
+      authorizationToken: authToken,
+      payingPartyId: partyId,
+      ifNoneMatch: ifNoneMatch,
+    );
+
+    final now = DateTime.now().toUtc();
+    final tokens = _cachedSession?.authTokens ??
+        BillingAuthTokens(accessToken: authToken);
+    final profile = _cachedSession?.userProfile ??
+        AuthUserProfile.fromAccessToken(authToken);
+
+    switch (result) {
+      case SyncNotModified(:final etag):
+        final unchanged = (_cachedSession ??
+                BillingAccountSession(
+                  authTokens: tokens,
+                  userProfile: profile,
+                ))
+            .copyWith(
+          billingStats: stats,
+          licenseEtag: etag ?? _cachedSession?.licenseEtag,
+          lastLicenseSyncAt: now,
+          payingPartyIdHeader: partyId,
+          updatedAt: now,
+        );
+        await _store.writeAccountSession(accountKey, unchanged);
+        _cachedSession = unchanged;
+        await _reconcileLicensePolling(accountKey);
+        return SessionSyncSuccess(
+          unchanged,
+          message: 'License already up to date.',
+        );
+      case SyncSuccess(:final signedToken, :final etag):
+        BillingSdk.init(signedToken);
+        final payload = BillingSdk.getPayload();
+        final session = BillingAccountSession(
+          authTokens: tokens,
+          userProfile: profile,
+          billingStats: stats,
+          licenseJwt: signedToken,
+          licensePayload: payload,
+          licenseEtag: etag,
+          payingPartyIdHeader: partyId,
+          lastLicenseSyncAt: now,
+          updatedAt: now,
+        );
+        await _writeSession(accountKey, session, signedToken);
+        await _reconcileLicensePolling(accountKey);
+        return SessionSyncSuccess(session);
+      case SyncFailure(:final message, :final error):
+        return SessionSyncFailure(message, error: error);
+    }
+  }
+
+  Future<void> _pollTick(String accountKey) async {
+    if (_pollInFlight) return;
+    if (!shouldPollLicenseEntitlements(_cachedSession)) {
+      await _reconcileLicensePolling(accountKey);
+      return;
+    }
+    _pollInFlight = true;
+    try {
+      await syncIfLicenseChanged(accountKey: accountKey);
+    } finally {
+      _pollInFlight = false;
+    }
+  }
+
+  Future<void> _reconcileLicensePolling(String accountKey) async {
+    final key = _pollingAccountKey ?? accountKey;
+    if (!shouldPollLicenseEntitlements(_cachedSession)) {
+      _pollTimer?.cancel();
+      _pollTimer = null;
+      return;
+    }
+    if (_pollingAccountKey == null) {
+      return;
+    }
+    if (_pollTimer != null) {
+      return;
+    }
+    _pollTimer = Timer.periodic(_pollInterval, (_) {
+      unawaited(_pollTick(key));
+    });
   }
 
   Future<void> _writeSession(

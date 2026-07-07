@@ -23,8 +23,18 @@ List<dynamic> _unwrapList(Map<String, dynamic> json) {
 sealed class SyncResult {}
 
 class SyncSuccess implements SyncResult {
-  const SyncSuccess({required this.signedToken});
+  const SyncSuccess({
+    required this.signedToken,
+    this.etag,
+  });
+
   final String signedToken;
+  final String? etag;
+}
+
+class SyncNotModified implements SyncResult {
+  const SyncNotModified({this.etag});
+  final String? etag;
 }
 
 class SyncFailure implements SyncResult {
@@ -84,9 +94,12 @@ class BillingApiClient {
   }
 
   /// GET `{origin}/api/v1/license` with billing access token.
+  ///
+  /// Pass [ifNoneMatch] (stored ETag) to receive [SyncNotModified] on HTTP 304.
   Future<SyncResult> fetchLicense({
     required String authorizationToken,
     String? payingPartyId,
+    String? ifNoneMatch,
   }) async {
     final raw = authorizationToken.trim();
     if (raw.isEmpty) {
@@ -100,11 +113,21 @@ class BillingApiClient {
     if (party != null && party.isNotEmpty) {
       headers['X-Paying-Party-Id'] = party;
     }
+    final etag = ifNoneMatch?.trim();
+    if (etag != null && etag.isNotEmpty) {
+      headers['If-None-Match'] = etag.startsWith('"') ? etag : '"$etag"';
+    }
 
     BillingSdkLogger.info('fetchLicense: GET', uri.toString());
 
     try {
       final response = await _http.get(uri, headers: headers);
+      final responseEtag = _readEtag(response.headers);
+
+      if (response.statusCode == 304) {
+        BillingSdkLogger.info('fetchLicense: not modified (304)');
+        return SyncNotModified(etag: responseEtag ?? etag);
+      }
 
       if (response.statusCode == 200) {
         final body = jsonDecode(response.body) as Map<String, dynamic>?;
@@ -118,7 +141,7 @@ class BillingApiClient {
             'fetchLicense: received signed token',
             '${signed.length} chars',
           );
-          return SyncSuccess(signedToken: signed);
+          return SyncSuccess(signedToken: signed, etag: responseEtag);
         }
 
         final err = BillingSyncError(
@@ -221,4 +244,10 @@ class BillingApiClient {
   }
 
   void close() => _http.close();
+
+  static String? _readEtag(Map<String, String> headers) {
+    final raw = headers['etag'] ?? headers['ETag'];
+    if (raw == null || raw.isEmpty) return null;
+    return raw.replaceAll('"', '').replaceFirst(RegExp(r'^W/'), '');
+  }
 }

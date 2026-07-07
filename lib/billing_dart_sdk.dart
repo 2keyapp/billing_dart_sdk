@@ -15,5 +15,6 @@ export 'src/session/billing_session_store.dart';
 export 'src/session/billing_subscription_matcher.dart';
 export 'src/session/billing_token_store.dart';
 export 'src/session/in_memory_billing_session_store.dart';
+export 'src/session/license_entitlements.dart';
 export 'src/verification/token_verifier.dart';
 export 'src/keys/public_key_loader_asset.dart' show loadPublicKeyFromAsset;
