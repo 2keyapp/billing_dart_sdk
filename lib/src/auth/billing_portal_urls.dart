@@ -5,16 +5,36 @@ class BillingPortalUrls {
   /// Portal web app origin, e.g. `https://billing.example.com` or dedicated portal host.
   final String portalBaseUrl;
 
-  /// Opens portal home; user must be paying-party owner (server validates access token).
-  Uri home({String? accessToken}) {
-    final base = portalBaseUrl.endsWith('/')
+  String get _base {
+    return portalBaseUrl.endsWith('/')
         ? portalBaseUrl.substring(0, portalBaseUrl.length - 1)
         : portalBaseUrl;
+  }
+
+  /// Opens portal home; user must be paying-party owner (server validates access token).
+  Uri home({String? accessToken}) {
     if (accessToken == null || accessToken.isEmpty) {
-      return Uri.parse(base);
+      return Uri.parse(_base);
     }
-    return Uri.parse(base).replace(
+    return Uri.parse(_base).replace(
       queryParameters: {'access_token': accessToken},
+    );
+  }
+
+  /// Session handoff entry — Flutter app opens this after minting a one-time token.
+  ///
+  /// The portal verifies `token` and continues PKCE to establish browser JWTs.
+  Uri sessionHandoff({String? redirectPath}) {
+    final params = <String, String>{};
+    final redirect = redirectPath?.trim();
+    if (redirect != null &&
+        redirect.isNotEmpty &&
+        redirect.startsWith('/') &&
+        !redirect.startsWith('//')) {
+      params['redirect'] = redirect;
+    }
+    return Uri.parse('$_base/auth/handoff').replace(
+      queryParameters: params.isEmpty ? null : params,
     );
   }
 

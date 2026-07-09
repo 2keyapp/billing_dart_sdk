@@ -217,20 +217,14 @@ class BillingSession {
     _pollingAccountKey = null;
   }
 
-  /// Refreshes OAuth tokens and re-runs [syncOnlineForAccount].
+  /// Refreshes the billing API JWT and re-runs [syncOnlineForAccount].
   Future<SessionSyncOutcome> refreshAndSync({
     required String accountKey,
-    required Future<BillingAuthTokens> Function(String refreshToken) refresh,
+    required Future<BillingAuthTokens> Function() refreshApiToken,
   }) async {
     final current = _cachedSession ?? await _store.readAccountSession(accountKey);
-    final refreshToken = current?.authTokens.refreshToken;
-    if (refreshToken == null || refreshToken.isEmpty) {
-      return const SessionSyncFailure(
-        'Session expired. Sign in again to sync billing.',
-      );
-    }
     try {
-      final tokens = await refresh(refreshToken);
+      final tokens = await refreshApiToken();
       await persistAuthTokens(accountKey: accountKey, tokens: tokens);
       return syncOnlineForAccount(
         accountKey: accountKey,

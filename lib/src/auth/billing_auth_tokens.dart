@@ -1,4 +1,6 @@
-/// OAuth tokens returned by billing embedded auth (`POST /api/auth/token`).
+import 'jwt_payload.dart';
+
+/// OAuth tokens returned by billing embedded auth (`GET /api/auth/token`).
 class BillingAuthTokens {
   const BillingAuthTokens({
     required this.accessToken,
@@ -27,6 +29,27 @@ class BillingAuthTokens {
     final at = expiresAt;
     if (at == null) return false;
     return DateTime.now().toUtc().isAfter(at);
+  }
+
+  factory BillingAuthTokens.fromJwtPluginToken(String token) {
+    final claims = decodeJwtPayload(token);
+    int? expiresInSeconds;
+    if (claims != null) {
+      final exp = claims['exp'];
+      if (exp is int) {
+        final secondsLeft = exp - DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
+        expiresInSeconds = secondsLeft > 0 ? secondsLeft : 0;
+      } else if (exp is num) {
+        final secondsLeft =
+            exp.toInt() - DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
+        expiresInSeconds = secondsLeft > 0 ? secondsLeft : 0;
+      }
+    }
+
+    return BillingAuthTokens(
+      accessToken: token,
+      expiresInSeconds: expiresInSeconds,
+    );
   }
 
   factory BillingAuthTokens.fromJson(Map<String, dynamic> json) {

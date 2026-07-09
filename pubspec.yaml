@@ -19,7 +19,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.10.4
+  sdk: ^3.9.0
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
@@ -34,6 +34,13 @@ dependencies:
   crypto: ^3.0.6
   dart_jsonwebtoken: ^3.2.0
   http: ^1.2.0
+  # Dart client — https://github.com/2keyapp/better-auth (path on main; server plugin on release-flutter)
+  better_auth:
+    git:
+      url: https://github.com/2keyapp/better-auth.git
+      ref: main
+      path: packages/flutter/dart
+  flutter_secure_storage: ^9.2.4
 
 dev_dependencies:
   flutter_test:
