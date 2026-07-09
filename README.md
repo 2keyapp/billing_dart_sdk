@@ -98,12 +98,13 @@ Register `scomm://` in `AUTH_FLUTTER_DEEP_LINK_SCHEMES` on the billing server an
 
 ```dart
 final discovery = await auth.discover();
-if (discovery.providers.isGoogleEnabled) { /* show Google */ }
-if (discovery.providers.isMicrosoftEnabled) { /* show Microsoft */ }
+if (discovery.isGoogleEnabled) { /* show Google */ }
+if (discovery.isMicrosoftEnabled) { /* show Microsoft */ }
+if (discovery.isAppleEnabled) { /* show Apple */ }
 ```
 
 Server derives enabled providers from env (`GOOGLE_*`, `MICROSOFT_*`, `APPLE_*`).  
-Public endpoints: `GET /api/auth/.well-known/oauth-providers` and `GET /api/auth/.well-known/openid-configuration`.
+Public endpoint: `GET /api/auth/.well-known/oauth-providers`. JWT verification uses `GET /api/auth/jwks`.
 
 ### 3. Session + sync
 

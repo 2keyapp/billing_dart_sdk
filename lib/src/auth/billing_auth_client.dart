@@ -146,23 +146,8 @@ class BillingAuthClient {
     return BillingOAuthProvidersDocument.fromJson(result.data ?? {});
   }
 
-  Future<BillingOpenIdConfiguration> fetchOpenIdConfiguration() async {
-    final result =
-        await _authClient.getJson('/.well-known/openid-configuration');
-    _throwOnError(result.error, 'Could not load OpenID configuration');
-    return BillingOpenIdConfiguration.fromJson(result.data ?? {});
-  }
-
-  Future<BillingAuthDiscovery> discover() async {
-    final results = await Future.wait([
-      fetchOAuthProviders(),
-      fetchOpenIdConfiguration(),
-    ]);
-    return BillingAuthDiscovery(
-      providers: results[0] as BillingOAuthProvidersDocument,
-      openId: results[1] as BillingOpenIdConfiguration,
-    );
-  }
+  /// Login discovery — oauth-providers only (no OIDC metadata on billing).
+  Future<BillingAuthDiscovery> discover() => fetchOAuthProviders();
 
   // ---------------------------------------------------------------------------
   // Billing API JWTs — JWT plugin (`GET /api/auth/token`)
