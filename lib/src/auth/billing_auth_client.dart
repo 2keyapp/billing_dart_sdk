@@ -133,6 +133,10 @@ class BillingAuthClient {
     _throwOnError(result.error, 'Sign out failed');
   }
 
+  /// Clears persisted Better Auth cookies/session cache on this device.
+  Future<void> clearLocalAuthSession() =>
+      _authClient.plugin?.clearSessionCache() ?? Future.value();
+
   Future<String> getSessionCookie() => _authClient.getCookie();
 
   // ---------------------------------------------------------------------------

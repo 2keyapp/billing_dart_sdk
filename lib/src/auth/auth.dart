@@ -6,3 +6,4 @@ export 'billing_auth_exception.dart';
 export 'billing_auth_tokens.dart';
 export 'billing_portal_urls.dart';
 export 'jwt_payload.dart';
+export 'package:better_auth/better_auth.dart' show AuthSessionLauncher;

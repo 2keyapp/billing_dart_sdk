@@ -14,7 +14,7 @@ packages:
     description:
       path: "packages/flutter/dart"
       ref: main
-      resolved-ref: c1d3e4ae0d1800e75409ef275f26b43ee49df61b
+      resolved-ref: "51f3efecbd5fa87d9d6222ee2e1c17137edc879b"
       url: "https://github.com/2keyapp/better-auth.git"
     source: git
     version: "0.1.0"
