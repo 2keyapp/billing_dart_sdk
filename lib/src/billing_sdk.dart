@@ -17,7 +17,7 @@ import 'package:billing_dart_sdk/src/verification/token_verifier.dart';
 /// - Account bootstrap (`GET /api/v1/subscriptions/me`)
 /// - Public plan catalog (`GET /api/v1/plans`)
 ///
-/// Use [BillingAuthClient] for PKCE login and [BillingSession] for persisted state.
+/// Use [BillingAuthClient] for Better Auth login and [BillingSession] for persisted state.
 class BillingSdk {
   BillingSdk._();
 

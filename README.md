@@ -12,7 +12,7 @@ A Flutter example app is included for local development and manual testing.
 
 | Concern | SDK surface |
 |--------|-------------|
-| Login | `BillingAuthClient` — PKCE OAuth + discovery (`oauth-providers`, OIDC config) |
+| Login | `BillingAuthClient` — Better Auth Flutter SDK against billing `/api/auth` |
 | Session | `BillingSession` — persist auth + license, online sync, **polling**, offline verify |
 | License | `BillingSdk.syncFromServer` → `GET /api/v1/license` (supports **ETag** / **304**) |
 | Bootstrap | `BillingSdk.ensureBillingContext` → `GET /api/v1/subscriptions/me` |
@@ -32,6 +32,8 @@ dependencies:
   billing_dart_sdk:
     path: ../billing_dart_sdk   # or your path / git ref
 ```
+
+`billing_dart_sdk` bundles the [Better Auth Dart client](https://github.com/2keyapp/better-auth/tree/main/packages/flutter/dart). The billing server uses `@better-auth/flutter` from [`release-flutter`](https://github.com/2keyapp/better-auth/tree/release-flutter). See the [Flutter integration guide](https://2keyapp-better-auth.netlify.app/docs/integrations/flutter).
 
 ```bash
 flutter pub get   # or dart pub get
@@ -55,46 +57,54 @@ await BillingSdk.configureWithAsset(
 - `billingApiBaseUrl` — billing **origin** (e.g. `https://billing.example.com`). The SDK calls `/api/v1/*` internally.
 - `publicKeyPem` / asset — EC public key (ES256) to verify **license** JWTs from `GET /api/v1/license`.
 
-### 2. Auth (PKCE)
+### 2. Auth (Better Auth)
 
-Billing hosts its own auth at `/api/auth`. The app opens a browser for login, then exchanges the authorization code:
+Billing hosts Better Auth at `/api/auth`. [BillingAuthClient](lib/src/auth/billing_auth_client.dart) wraps the official `better_auth` Flutter SDK against your billing server.
 
 ```dart
-final auth = BillingAuthClient(billingBaseUrl: 'https://billing.example.com');
-final pkce = BillingPkceRequest.create(
-  redirectUri: 'myapp://auth/callback',
+final auth = BillingAuthClient(
+  billingBaseUrl: 'https://billing.example.com',
+  deepLinkScheme: 'scomm',
+  storage: SecureBillingAuthStorage(storagePrefix: 'billing_scomm'),
+  sessionLauncher: ({required authorizationUrl, required callbackUrl}) async {
+    // e.g. flutter_web_auth_2 for Google/Microsoft
+    ...
+  },
 );
 
-// Open auth.buildAuthorizeUrl(..., loginProvider: 'google') in browser; user returns with ?code=...
-final tokens = await auth.exchangeAuthorizationCode(
-  code: authorizationCode,
-  redirectUri: pkce.redirectUri,
-  codeVerifier: pkce.codeVerifier,
+// 1) Sign in (Better Auth session on billing server)
+await auth.signInSocial(provider: 'google');
+
+// 2) Mint billing API JWT for /api/v1/*
+final tokens = await auth.acquireApiToken();
+
+// 3) Persist + sync license
+await session.persistAuthTokens(accountKey: userId, tokens: tokens);
+await session.syncOnlineForAccount(accountKey: userId);
+
+// Re-mint JWT when near expiry:
+await auth.refreshApiToken();
+
+// Open billing portal in browser (session handoff):
+final handoffUrl = await auth.createPortalHandoffUrl(
+  portalBaseUrl: 'https://portal.example.com',
+  redirectPath: '/subscriptions',
 );
 ```
 
-Use `tokens.accessToken` (audience `billing`) for sync — not raw Google/Microsoft IdP tokens.
-
-Embedded/native clients should pass `loginProvider: 'google'` or `'microsoft'` on `buildAuthorizeUrl` so the server skips its `/login` chooser and redirects straight to the IdP.
+Register `scomm://` in `AUTH_FLUTTER_DEEP_LINK_SCHEMES` on the billing server and deep-link intent filters on Android / URL types on iOS (social OAuth callbacks).
 
 ### Discover enabled login options
 
-Before showing a login screen, fetch what the server supports:
-
 ```dart
-final auth = BillingAuthClient(billingBaseUrl: 'https://billing.example.com');
-
-// Option A: provider list only (google / microsoft / email)
-final providers = await auth.fetchOAuthProviders();
-if (providers.isGoogleEnabled) { /* show Google button */ }
-if (providers.isEmailEnabled) { /* show email form */ }
-
-// Option B: full discovery (providers + OIDC endpoints)
 final discovery = await auth.discover();
-final authorizeEndpoint = discovery.openId.authorizationEndpoint;
+if (discovery.isGoogleEnabled) { /* show Google */ }
+if (discovery.isMicrosoftEnabled) { /* show Microsoft */ }
+if (discovery.isAppleEnabled) { /* show Apple */ }
 ```
 
-Public endpoints (no auth): `GET /api/auth/.well-known/oauth-providers` and `GET /api/auth/.well-known/openid-configuration`.
+Server derives enabled providers from env (`GOOGLE_*`, `MICROSOFT_*`, `APPLE_*`).  
+Public endpoint: `GET /api/auth/.well-known/oauth-providers`. JWT verification uses `GET /api/auth/jwks`.
 
 ### 3. Session + sync
 
@@ -180,19 +190,15 @@ final result = await BillingSdk.syncFromServer(
 
 ---
 
-## Better Auth alignment (in progress)
+## Auth architecture
 
-The **billing portal** is the reference OAuth client. This SDK’s `BillingAuthClient` still needs parity:
+| Layer | Implementation |
+|-------|----------------|
+| Identity (login, session, social) | `better_auth` Dart SDK via `BillingAuthClient` |
+| Billing API JWT (`aud: billing`) | `GET /api/auth/token` with session cookie (`acquireApiToken` / `refreshApiToken`) |
+| License sync / entitlements | `BillingSession` + `BillingSdk` (unchanged) |
 
-| Gap | Target (match portal) |
-|-----|------------------------|
-| Scope | Add `offline_access` |
-| Audience | `resource=billing` on authorize + token + refresh |
-| Token request | `application/x-www-form-urlencoded` |
-| Social login | `POST /sign-in/social` + oauth-resume flow |
-| Client ID | Configurable (native apps need their own Better Auth client) |
-
-Planned extraction: reusable **`better_auth_client`** Dart package. See **[LICENSE_SYNC_AND_SDK_PLAN.md](../billing/LICENSE_SYNC_AND_SDK_PLAN.md)** §7.
+Server: `better-auth` + `@better-auth/flutter` on the billing app at `/api/auth`.
 
 ---
 

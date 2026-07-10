@@ -8,12 +8,13 @@ class BillingOAuthProvidersDocument {
   final String issuer;
   final List<BillingAuthProviderInfo> providers;
 
-  /// Providers the server has enabled (google, microsoft, email, …).
+  /// Providers the server has enabled (google, microsoft, apple, email, …).
   List<BillingAuthProviderInfo> get enabledProviders =>
       providers.where((p) => p.enabled).toList();
 
   bool get isGoogleEnabled => _isEnabled('google');
   bool get isMicrosoftEnabled => _isEnabled('microsoft');
+  bool get isAppleEnabled => _isEnabled('apple');
   bool get isEmailEnabled => _isEnabled('email');
 
   bool _isEnabled(String id) =>
@@ -38,78 +39,39 @@ class BillingAuthProviderInfo {
   const BillingAuthProviderInfo({
     required this.id,
     required this.enabled,
-    this.authorizedRedirectUris = const [],
+    this.redirectUri,
     this.idpConsole,
+    this.authorizedRedirectUris = const [],
   });
 
-  /// Provider id: `google`, `microsoft`, `email`, …
+  /// Provider id: `google`, `microsoft`, `apple`, `email`, …
   final String id;
   final bool enabled;
-  final List<String> authorizedRedirectUris;
+
+  /// Better Auth social callback URL (`{issuer}/callback/{id}`).
+  final String? redirectUri;
   final String? idpConsole;
 
+  /// Legacy shape; populated from [redirectUri] when present.
+  final List<String> authorizedRedirectUris;
+
   factory BillingAuthProviderInfo.fromJson(Map<String, dynamic> json) {
+    final redirectUri = json['redirectUri'] as String?;
     final redirects = json['authorizedRedirectUris'];
+    final legacyRedirects = redirects is List
+        ? redirects.map((e) => e.toString()).toList()
+        : const <String>[];
     return BillingAuthProviderInfo(
       id: json['id'] as String? ?? '',
       enabled: json['enabled'] as bool? ?? false,
-      authorizedRedirectUris: redirects is List
-          ? redirects.map((e) => e.toString()).toList()
-          : const [],
+      redirectUri: redirectUri,
       idpConsole: json['idpConsole'] as String?,
-    );
-  }
-}
-
-/// OIDC discovery from `GET /api/auth/.well-known/openid-configuration`.
-class BillingOpenIdConfiguration {
-  const BillingOpenIdConfiguration({
-    required this.issuer,
-    this.authorizationEndpoint,
-    this.tokenEndpoint,
-    this.jwksUri,
-    this.scopesSupported = const [],
-    this.grantTypesSupported = const [],
-    this.codeChallengeMethodsSupported = const [],
-  });
-
-  final String issuer;
-  final String? authorizationEndpoint;
-  final String? tokenEndpoint;
-  final String? jwksUri;
-  final List<String> scopesSupported;
-  final List<String> grantTypesSupported;
-  final List<String> codeChallengeMethodsSupported;
-
-  bool get supportsPkceS256 =>
-      codeChallengeMethodsSupported.map((m) => m.toUpperCase()).contains('S256');
-
-  factory BillingOpenIdConfiguration.fromJson(Map<String, dynamic> json) {
-    List<String> strings(Object? raw) {
-      if (raw is! List) return const [];
-      return raw.map((e) => e.toString()).toList();
-    }
-
-    return BillingOpenIdConfiguration(
-      issuer: json['issuer'] as String? ?? '',
-      authorizationEndpoint: json['authorization_endpoint'] as String?,
-      tokenEndpoint: json['token_endpoint'] as String?,
-      jwksUri: json['jwks_uri'] as String?,
-      scopesSupported: strings(json['scopes_supported']),
-      grantTypesSupported: strings(json['grant_types_supported']),
-      codeChallengeMethodsSupported:
-          strings(json['code_challenge_methods_supported']),
+      authorizedRedirectUris: redirectUri != null && redirectUri.isNotEmpty
+          ? [redirectUri, ...legacyRedirects]
+          : legacyRedirects,
     );
   }
 }
 
 /// Combined auth discovery for client login screens.
-class BillingAuthDiscovery {
-  const BillingAuthDiscovery({
-    required this.providers,
-    required this.openId,
-  });
-
-  final BillingOAuthProvidersDocument providers;
-  final BillingOpenIdConfiguration openId;
-}
+typedef BillingAuthDiscovery = BillingOAuthProvidersDocument;

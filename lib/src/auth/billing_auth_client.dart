@@ -1,245 +1,209 @@
-import 'dart:convert';
-
-import 'package:http/http.dart' as http;
+import 'package:better_auth/better_auth.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../api/billing_api_client.dart';
 import '../logging/sdk_logger.dart';
-import 'billing_auth_tokens.dart';
+import 'billing_api_token_mint.dart';
 import 'billing_auth_discovery.dart';
-import 'pkce.dart';
+import 'billing_auth_exception.dart';
+import 'billing_auth_tokens.dart';
+import 'billing_portal_urls.dart';
 
-/// PKCE OAuth client for billing embedded auth at `/api/auth`.
+/// Persists Better Auth session data via [FlutterSecureStorage].
+class SecureBillingAuthStorage implements AuthStorage {
+  SecureBillingAuthStorage({
+    FlutterSecureStorage? storage,
+    required this.storagePrefix,
+  }) : _storage = storage ?? const FlutterSecureStorage();
+
+  final FlutterSecureStorage _storage;
+  final String storagePrefix;
+
+  String _key(String name) => '$storagePrefix:$name';
+
+  @override
+  Future<String?> getItem(String key) => _storage.read(key: _key(key));
+
+  @override
+  Future<void> setItem(String key, String value) =>
+      _storage.write(key: _key(key), value: value);
+
+  @override
+  Future<void> removeItem(String key) => _storage.delete(key: _key(key));
+}
+
+/// Billing auth client — Better Auth Flutter SDK against the billing server.
+///
+/// - **Identity:** social sign-in via `better_auth` + `flutterClient`
+/// - **Billing API:** `GET /api/auth/token` after session (JWT plugin)
+/// - **Portal:** one-time-token session handoff to the billing portal
 class BillingAuthClient {
   BillingAuthClient({
     required String billingBaseUrl,
-    this.clientId = 'billing_portal_web',
-    this.defaultScope = 'openid profile email offline_access',
-    this.apiAudience = 'billing',
-    http.Client? httpClient,
-  }) : _origin = normalizeBillingApiBaseUrl(billingBaseUrl),
-       _http = httpClient ?? http.Client();
+    required String deepLinkScheme,
+    required AuthStorage storage,
+    AuthSessionLauncher? sessionLauncher,
+    this.storagePrefix = 'billing_scomm',
+  })  : _origin = normalizeBillingApiBaseUrl(billingBaseUrl),
+        deepLinkScheme = deepLinkScheme {
+    final base = _origin.endsWith('/') ? _origin : '$_origin/';
+    _authClient = createAuthClient(
+      baseUrl: base,
+      basePath: '/api/auth',
+      plugin: flutterClient(
+        FlutterClientOptions(
+          scheme: deepLinkScheme,
+          storage: storage,
+          storagePrefix: storagePrefix,
+          sessionLauncher: sessionLauncher,
+        ),
+      ),
+      sessionOptions: const SessionOptions(
+        refetchInterval: Duration(minutes: 5),
+        refetchOnAppResume: true,
+      ),
+    );
+    _tokenMint = BillingApiTokenMint(authBaseUrl: authBaseUrl);
+  }
 
   final String _origin;
-  final String clientId;
-  final String defaultScope;
-  final String apiAudience;
-  final http.Client _http;
+  final String storagePrefix;
+  final String deepLinkScheme;
+  late final AuthClient _authClient;
+  late final BillingApiTokenMint _tokenMint;
+
+  /// Underlying Better Auth client (advanced use / plugins).
+  AuthClient get authClient => _authClient;
 
   String get authBaseUrl {
     final base = _origin.endsWith('/') ? _origin : '$_origin/';
     return '${base}api/auth';
   }
 
-  /// GET `/api/auth/.well-known/oauth-providers` — which login methods are enabled.
+  /// Call when the app returns to the foreground (session refresh).
+  void onAppResumed() => _authClient.onAppResumed();
+
+  // ---------------------------------------------------------------------------
+  // Better Auth — identity & session
+  // ---------------------------------------------------------------------------
+
+  Future<void> signUpEmail({
+    required String email,
+    required String password,
+    required String name,
+  }) async {
+    final result = await _authClient.signUpEmail(
+      email: email,
+      password: password,
+      name: name,
+    );
+    _throwOnError(result.error, 'Sign up failed');
+  }
+
+  Future<void> signInEmail({
+    required String email,
+    required String password,
+  }) async {
+    final result = await _authClient.signInEmail(
+      email: email,
+      password: password,
+    );
+    _throwOnError(result.error, 'Sign in failed');
+  }
+
+  Future<void> signInSocial({
+    required String provider,
+    String? callbackURL,
+  }) async {
+    final result = await _authClient.signInSocial(
+      provider: provider,
+      callbackURL: callbackURL ?? '$deepLinkScheme://auth/callback',
+    );
+    _throwOnError(result.error, 'Social sign-in failed');
+  }
+
+  Future<SessionData?> getSession() async {
+    final result = await _authClient.getSession();
+    _throwOnError(result.error, 'Could not load session');
+    return result.data;
+  }
+
+  Future<void> signOut() async {
+    final result = await _authClient.signOut();
+    _throwOnError(result.error, 'Sign out failed');
+  }
+
+  /// Clears persisted Better Auth cookies/session cache on this device.
+  Future<void> clearLocalAuthSession() =>
+      _authClient.plugin?.clearSessionCache() ?? Future.value();
+
+  Future<String> getSessionCookie() => _authClient.getCookie();
+
+  // ---------------------------------------------------------------------------
+  // Discovery — login UI bootstrap
+  // ---------------------------------------------------------------------------
+
+  /// Enabled login methods from `GET /api/auth/.well-known/oauth-providers`.
   Future<BillingOAuthProvidersDocument> fetchOAuthProviders() async {
-    final uri = Uri.parse('$authBaseUrl/.well-known/oauth-providers');
-    BillingSdkLogger.info('BillingAuthClient: GET oauth-providers');
-    final response = await _http.get(uri);
-    if (response.statusCode != 200) {
-      throw BillingAuthException(
-        'Could not load auth providers (HTTP ${response.statusCode}).',
-        statusCode: response.statusCode,
-        responseBody: response.body,
-      );
-    }
-    final decoded = jsonDecode(response.body);
-    if (decoded is! Map<String, dynamic>) {
-      throw const BillingAuthException('Invalid oauth-providers response.');
-    }
-    return BillingOAuthProvidersDocument.fromJson(decoded);
+    final result = await _authClient.getJson('/.well-known/oauth-providers');
+    _throwOnError(result.error, 'Could not load auth providers');
+    return BillingOAuthProvidersDocument.fromJson(result.data ?? {});
   }
 
-  /// GET `/api/auth/.well-known/openid-configuration` — OIDC discovery document.
-  Future<BillingOpenIdConfiguration> fetchOpenIdConfiguration() async {
-    final uri = Uri.parse('$authBaseUrl/.well-known/openid-configuration');
-    BillingSdkLogger.info('BillingAuthClient: GET openid-configuration');
-    final response = await _http.get(uri);
-    if (response.statusCode != 200) {
-      throw BillingAuthException(
-        'Could not load OpenID configuration (HTTP ${response.statusCode}).',
-        statusCode: response.statusCode,
-        responseBody: response.body,
-      );
-    }
-    final decoded = jsonDecode(response.body);
-    if (decoded is! Map<String, dynamic>) {
-      throw const BillingAuthException('Invalid openid-configuration response.');
-    }
-    return BillingOpenIdConfiguration.fromJson(decoded);
+  /// Login discovery — oauth-providers only (no OIDC metadata on billing).
+  Future<BillingAuthDiscovery> discover() => fetchOAuthProviders();
+
+  // ---------------------------------------------------------------------------
+  // Billing API JWTs — JWT plugin (`GET /api/auth/token`)
+  // ---------------------------------------------------------------------------
+
+  /// Mints a billing API JWT from the current Better Auth session.
+  Future<BillingAuthTokens> acquireApiToken() async {
+    final cookie = await getSessionCookie();
+    return _tokenMint.mintFromSessionCookie(cookie);
   }
 
-  /// Loads provider list and OIDC config together for login UI bootstrap.
-  Future<BillingAuthDiscovery> discover() async {
-    final results = await Future.wait([
-      fetchOAuthProviders(),
-      fetchOpenIdConfiguration(),
-    ]);
-    return BillingAuthDiscovery(
-      providers: results[0] as BillingOAuthProvidersDocument,
-      openId: results[1] as BillingOpenIdConfiguration,
-    );
-  }
+  /// Re-mints the billing API JWT when the session is still valid.
+  Future<BillingAuthTokens> refreshApiToken() => acquireApiToken();
 
-  /// Builds the browser authorize URL for PKCE login.
-  ///
-  /// Pass [loginProvider] (`google`, `microsoft`, `email`) so embedded clients
-  /// skip the server `/login` chooser and go straight to the IdP.
-  Uri buildAuthorizeUrl({
-    required String redirectUri,
-    required String state,
-    String? codeVerifier,
-    String? scope,
-    String? deviceId,
-    String? platform,
-    String? loginProvider,
-  }) {
-    final verifier = codeVerifier ?? generatePkceVerifier();
-    final challenge = pkceChallengeS256(verifier);
-    final params = <String, String>{
-      'response_type': 'code',
-      'client_id': clientId,
-      'redirect_uri': redirectUri,
-      'scope': scope ?? defaultScope,
-      'state': state,
-      'code_challenge': challenge,
-      'code_challenge_method': 'S256',
-      if (deviceId != null && deviceId.isNotEmpty) 'device_id': deviceId,
-      if (platform != null && platform.isNotEmpty) 'platform': platform,
-      if (loginProvider != null && loginProvider.isNotEmpty)
-        'login_provider': loginProvider,
-      if (apiAudience.isNotEmpty) 'resource': apiAudience,
-    };
-    return Uri.parse('$authBaseUrl/authorize').replace(queryParameters: params);
-  }
+  // ---------------------------------------------------------------------------
+  // Portal session handoff (Flutter → browser)
+  // ---------------------------------------------------------------------------
 
-  String resolveTokenEndpoint({String? tokenEndpoint}) {
-    final configured = tokenEndpoint?.trim();
-    if (configured != null && configured.isNotEmpty) return configured;
-    return '$authBaseUrl/oauth2/token';
-  }
-
-  /// Exchanges an authorization code for access + refresh tokens.
-  Future<BillingAuthTokens> exchangeAuthorizationCode({
-    required String code,
-    required String redirectUri,
-    required String codeVerifier,
-    String? deviceId,
-    String? tokenEndpoint,
+  Future<Uri> createPortalHandoffUrl({
+    required String portalBaseUrl,
+    String? redirectPath,
   }) async {
-    final uri = Uri.parse(resolveTokenEndpoint(tokenEndpoint: tokenEndpoint));
-    final body = <String, String>{
-      'grant_type': 'authorization_code',
-      'code': code,
-      'client_id': clientId,
-      'redirect_uri': redirectUri,
-      'code_verifier': codeVerifier,
-      if (apiAudience.isNotEmpty) 'resource': apiAudience,
-    };
-    BillingSdkLogger.info('BillingAuthClient: POST token (code exchange)');
-    final response = await _http.post(
-      uri,
-      headers: _tokenRequestHeaders(deviceId: deviceId),
-      body: _encodeFormBody(body),
+    final portalUrls = BillingPortalUrls(portalBaseUrl: portalBaseUrl);
+    final target = portalUrls.sessionHandoff(redirectPath: redirectPath);
+    final result = await _authClient.createSessionHandoffUrl(
+      targetUrl: target.toString(),
     );
-    return _parseTokenResponse(response);
-  }
-
-  /// Rotates access + refresh tokens.
-  Future<BillingAuthTokens> refreshTokens(
-    String refreshToken, {
-    String? tokenEndpoint,
-  }) async {
-    final uri = Uri.parse(resolveTokenEndpoint(tokenEndpoint: tokenEndpoint));
-    final body = <String, String>{
-      'grant_type': 'refresh_token',
-      'refresh_token': refreshToken,
-      'client_id': clientId,
-      if (apiAudience.isNotEmpty) 'resource': apiAudience,
-    };
-    BillingSdkLogger.info('BillingAuthClient: POST refresh');
-    final response = await _http.post(
-      uri,
-      headers: _tokenRequestHeaders(),
-      body: _encodeFormBody(body),
-    );
-    return _parseTokenResponse(response);
-  }
-
-  /// Revokes refresh token session.
-  Future<void> logout({String? refreshToken}) async {
-    if (refreshToken == null || refreshToken.isEmpty) return;
-    final uri = Uri.parse('$authBaseUrl/logout');
-    await _http.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'refresh_token': refreshToken}),
-    );
-    BillingSdkLogger.info('BillingAuthClient: POST logout');
-  }
-
-  BillingAuthTokens _parseTokenResponse(http.Response response) {
-    if (response.statusCode < 200 || response.statusCode >= 300) {
+    if (result.error != null) {
       throw BillingAuthException(
-        'Authentication failed (HTTP ${response.statusCode}).',
-        statusCode: response.statusCode,
-        responseBody: response.body,
+        result.error?.message ?? 'Session handoff failed',
       );
     }
-    final decoded = jsonDecode(response.body);
-    if (decoded is! Map<String, dynamic>) {
-      throw const BillingAuthException('Invalid auth response.');
+    final url = result.data;
+    if (url == null) {
+      throw const BillingAuthException(
+        'Session handoff URL was not returned by the auth server.',
+      );
     }
-    return BillingAuthTokens.fromJson(decoded);
+    BillingSdkLogger.info('BillingAuthClient: portal handoff URL ready');
+    return url;
   }
 
-  Map<String, String> _tokenRequestHeaders({String? deviceId}) {
-    final headers = <String, String>{
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Accept': 'application/json',
-    };
-    if (deviceId != null && deviceId.isNotEmpty) {
-      headers['X-Uids-Device-Id'] = deviceId;
-    }
-    return headers;
+  Future<void> dispose() async {
+    _tokenMint.close();
+    await _authClient.dispose();
   }
 
-  String _encodeFormBody(Map<String, String> fields) =>
-      Uri(queryParameters: fields).query;
-
-  void close() => _http.close();
-}
-
-class BillingAuthException implements Exception {
-  const BillingAuthException(this.message, {this.statusCode, this.responseBody});
-
-  final String message;
-  final int? statusCode;
-  final String? responseBody;
-
-  @override
-  String toString() => message;
-}
-
-/// Convenience holder for an in-flight PKCE login (store [codeVerifier] until callback).
-class BillingPkceRequest {
-  BillingPkceRequest({
-    required this.codeVerifier,
-    required this.state,
-    required this.redirectUri,
-  });
-
-  final String codeVerifier;
-  final String state;
-  final String redirectUri;
-
-  factory BillingPkceRequest.create({
-    required String redirectUri,
-    String? state,
-  }) {
-    return BillingPkceRequest(
-      codeVerifier: generatePkceVerifier(),
-      state: state ?? generatePkceVerifier(byteLength: 16),
-      redirectUri: redirectUri,
+  void _throwOnError(AuthError? error, String fallback) {
+    if (error == null) return;
+    throw BillingAuthException(
+      error.message.isNotEmpty ? error.message : fallback,
+      statusCode: error.status,
     );
   }
 }
