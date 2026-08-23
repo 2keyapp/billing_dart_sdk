@@ -1,64 +1,62 @@
-import 'package:better_auth/better_auth.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:better_auth/better_auth.dart' as ba;
 
 import '../api/billing_api_client.dart';
 import '../logging/sdk_logger.dart';
 import 'billing_api_token_mint.dart';
 import 'billing_auth_discovery.dart';
 import 'billing_auth_exception.dart';
+import 'billing_auth_session.dart';
+import 'billing_auth_storage.dart';
 import 'billing_auth_tokens.dart';
 import 'billing_portal_urls.dart';
 
-/// Persists Better Auth session data via [FlutterSecureStorage].
-class SecureBillingAuthStorage implements AuthStorage {
-  SecureBillingAuthStorage({
-    FlutterSecureStorage? storage,
-    required this.storagePrefix,
-  }) : _storage = storage ?? const FlutterSecureStorage();
+/// Adapts [BillingAuthStorage] to Better Auth's internal [ba.AuthStorage].
+class _BetterAuthStorageAdapter implements ba.AuthStorage {
+  _BetterAuthStorageAdapter(this._inner);
 
-  final FlutterSecureStorage _storage;
-  final String storagePrefix;
-
-  String _key(String name) => '$storagePrefix:$name';
+  final BillingAuthStorage _inner;
 
   @override
-  Future<String?> getItem(String key) => _storage.read(key: _key(key));
+  Future<String?> getItem(String key) => _inner.getItem(key);
 
   @override
   Future<void> setItem(String key, String value) =>
-      _storage.write(key: _key(key), value: value);
+      _inner.setItem(key, value);
 
   @override
-  Future<void> removeItem(String key) => _storage.delete(key: _key(key));
+  Future<void> removeItem(String key) => _inner.removeItem(key);
 }
 
 /// Billing auth client — Better Auth Flutter SDK against the billing server.
 ///
-/// - **Identity:** social sign-in via `better_auth` + `flutterClient`
+/// Host apps depend only on this facade (and other `billing_dart_sdk` types).
+/// Better Auth stays an internal SDK dependency and is not re-exported.
+///
+/// - **Identity:** social / email sign-in
 /// - **Billing API:** `GET /api/auth/token` after session (JWT plugin)
 /// - **Portal:** one-time-token session handoff to the billing portal
 class BillingAuthClient {
   BillingAuthClient({
     required String billingBaseUrl,
     required String deepLinkScheme,
-    required AuthStorage storage,
+    required BillingAuthStorage storage,
     AuthSessionLauncher? sessionLauncher,
     this.storagePrefix = 'billing_scomm',
   })  : _origin = normalizeBillingApiBaseUrl(billingBaseUrl),
         deepLinkScheme = deepLinkScheme {
     final base = _origin.endsWith('/') ? _origin : '$_origin/';
-    _authClient = createAuthClient(
+    _authClient = ba.createAuthClient(
       baseUrl: base,
       basePath: '/api/auth',
-      plugin: flutterClient(
-        FlutterClientOptions(
+      plugin: ba.flutterClient(
+        ba.FlutterClientOptions(
           scheme: deepLinkScheme,
-          storage: storage,
+          storage: _BetterAuthStorageAdapter(storage),
           storagePrefix: storagePrefix,
           sessionLauncher: sessionLauncher,
         ),
       ),
-      sessionOptions: const SessionOptions(
+      sessionOptions: const ba.SessionOptions(
         refetchInterval: Duration(minutes: 5),
         refetchOnAppResume: true,
       ),
@@ -69,22 +67,25 @@ class BillingAuthClient {
   final String _origin;
   final String storagePrefix;
   final String deepLinkScheme;
-  late final AuthClient _authClient;
+  late final ba.AuthClient _authClient;
   late final BillingApiTokenMint _tokenMint;
-
-  /// Underlying Better Auth client (advanced use / plugins).
-  AuthClient get authClient => _authClient;
 
   String get authBaseUrl {
     final base = _origin.endsWith('/') ? _origin : '$_origin/';
     return '${base}api/auth';
   }
 
+  /// Enables or disables Better Auth's built-in session polling.
+  ///
+  /// Host apps that refresh the session explicitly (app resume, sign-in, token
+  /// refresh) should call `setOnline(false)` after construction.
+  void setOnline(bool value) => _authClient.setOnline(value);
+
   /// Call when the app returns to the foreground (session refresh).
   void onAppResumed() => _authClient.onAppResumed();
 
   // ---------------------------------------------------------------------------
-  // Better Auth — identity & session
+  // Identity & session
   // ---------------------------------------------------------------------------
 
   Future<void> signUpEmail({
@@ -122,10 +123,21 @@ class BillingAuthClient {
     _throwOnError(result.error, 'Social sign-in failed');
   }
 
-  Future<SessionData?> getSession() async {
+  Future<BillingAuthSession?> getSession() async {
     final result = await _authClient.getSession();
     _throwOnError(result.error, 'Could not load session');
-    return result.data;
+    final data = result.data;
+    if (data == null) return null;
+    final user = data.user;
+    return BillingAuthSession(
+      user: BillingAuthSessionUser(
+        id: user.id,
+        email: user.email.isEmpty ? null : user.email,
+        name: user.name.isEmpty ? null : user.name,
+        image: user.image,
+        emailVerified: user.emailVerified,
+      ),
+    );
   }
 
   Future<void> signOut() async {
@@ -133,7 +145,7 @@ class BillingAuthClient {
     _throwOnError(result.error, 'Sign out failed');
   }
 
-  /// Clears persisted Better Auth cookies/session cache on this device.
+  /// Clears persisted auth cookies/session cache on this device.
   Future<void> clearLocalAuthSession() =>
       _authClient.plugin?.clearSessionCache() ?? Future.value();
 
@@ -199,7 +211,7 @@ class BillingAuthClient {
     await _authClient.dispose();
   }
 
-  void _throwOnError(AuthError? error, String fallback) {
+  void _throwOnError(ba.AuthError? error, String fallback) {
     if (error == null) return;
     throw BillingAuthException(
       error.message.isNotEmpty ? error.message : fallback,

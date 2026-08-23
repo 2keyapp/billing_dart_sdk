@@ -34,11 +34,12 @@ dependencies:
   crypto: ^3.0.6
   dart_jsonwebtoken: ^3.2.0
   http: ^1.2.0
-  # Dart client — https://github.com/2keyapp/better-auth (path on main; server plugin on release-flutter)
+  # Internal only — host apps must depend on billing_dart_sdk, never better_auth.
+  # Pin SHA (see docs/2key-billing-sdk-architecture.md §6.3 / §9.3).
   better_auth:
     git:
       url: https://github.com/2keyapp/better-auth.git
-      ref: main
+      ref: 51f3efecbd5fa87d9d6222ee2e1c17137edc879b
       path: packages/flutter/dart
   flutter_secure_storage: ^9.2.4
 

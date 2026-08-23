@@ -33,7 +33,7 @@ dependencies:
     path: ../billing_dart_sdk   # or your path / git ref
 ```
 
-`billing_dart_sdk` bundles the [Better Auth Dart client](https://github.com/2keyapp/better-auth/tree/main/packages/flutter/dart). The billing server uses `@better-auth/flutter` from [`release-flutter`](https://github.com/2keyapp/better-auth/tree/release-flutter). See the [Flutter integration guide](https://2keyapp-better-auth.netlify.app/docs/integrations/flutter).
+`billing_dart_sdk` bundles the [Better Auth Dart client](https://github.com/2keyapp/better-auth/tree/main/packages/flutter/dart) as an **internal** dependency. Host apps must depend on **`billing_dart_sdk` only** — never on `package:better_auth` (see [docs/2key-billing-sdk-architecture.md](docs/2key-billing-sdk-architecture.md)). The billing server uses `@better-auth/flutter` from [`release-flutter`](https://github.com/2keyapp/better-auth/tree/release-flutter). See the [Flutter integration guide](https://2keyapp-better-auth.netlify.app/docs/integrations/flutter).
 
 ```bash
 flutter pub get   # or dart pub get
@@ -59,7 +59,7 @@ await BillingSdk.configureWithAsset(
 
 ### 2. Auth (Better Auth)
 
-Billing hosts Better Auth at `/api/auth`. [BillingAuthClient](lib/src/auth/billing_auth_client.dart) wraps the official `better_auth` Flutter SDK against your billing server.
+Billing hosts Better Auth at `/api/auth`. [BillingAuthClient](lib/src/auth/billing_auth_client.dart) wraps the official `better_auth` Flutter SDK against your billing server. Host apps never import `better_auth` — only `billing_dart_sdk`.
 
 ```dart
 final auth = BillingAuthClient(
@@ -71,6 +71,9 @@ final auth = BillingAuthClient(
     ...
   },
 );
+
+// Optional: disable built-in session polling (refresh explicitly instead)
+auth.setOnline(false);
 
 // 1) Sign in (Better Auth session on billing server)
 await auth.signInSocial(provider: 'google');
