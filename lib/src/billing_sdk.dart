@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:billing_dart_sdk/src/api/billing_api_client.dart';
 import 'package:billing_dart_sdk/src/catalog/plan_catalog.dart';
+import 'package:billing_dart_sdk/src/config/billing_sdk_config.dart';
 import 'package:billing_dart_sdk/src/keys/default_public_key.dart';
 import 'package:billing_dart_sdk/src/keys/public_key_loader.dart';
 import 'package:billing_dart_sdk/src/keys/public_key_loader_asset.dart';
@@ -17,7 +18,7 @@ import 'package:billing_dart_sdk/src/verification/token_verifier.dart';
 /// - Account bootstrap (`GET /api/v1/subscriptions/me`)
 /// - Public plan catalog (`GET /api/v1/plans`)
 ///
-/// Use [BillingAuthClient] for Better Auth login and [BillingSession] for persisted state.
+/// Use [BillingAuthClient] for login and [BillingSession] for persisted state.
 class BillingSdk {
   BillingSdk._();
 
@@ -25,11 +26,15 @@ class BillingSdk {
   static String? _publicKeyPem;
   static TokenVerifier? _verifier;
   static BillingApiClient? _apiClient;
+  static BillingSdkConfig? _config;
 
   static BillingTokenPayload? _currentPayload;
   static String? _loadedKeyFingerprint;
 
   static String? get loadedKeyFingerprint => _loadedKeyFingerprint;
+
+  /// Last config applied via [configureFrom], if any.
+  static BillingSdkConfig? get config => _config;
 
   static String _pemFingerprint(String pem) {
     const begin = '-----BEGIN PUBLIC KEY-----';
@@ -49,15 +54,36 @@ class BillingSdk {
     String? publicKeyPath,
   }) {
     if (billingApiBaseUrl != null) _billingApiBaseUrl = billingApiBaseUrl;
-    if (publicKeyPem != null) _publicKeyPem = publicKeyPem;
+    if (publicKeyPem != null) {
+      _publicKeyPem = publicKeyPem;
+      _loadedKeyFingerprint = _pemFingerprint(publicKeyPem);
+    }
     if (publicKeyPath != null && publicKeyPath.trim().isNotEmpty) {
       _publicKeyPem = loadPublicKeyFromPath(publicKeyPath.trim());
       _loadedKeyFingerprint = _pemFingerprint(_publicKeyPem!);
-    } else if (publicKeyPem != null) {
-      _loadedKeyFingerprint = _pemFingerprint(publicKeyPem);
     }
     _verifier = null;
     _apiClient = null;
+  }
+
+  /// Applies [BillingSdkConfig] (API base URL + license public key).
+  ///
+  /// Prefer this over piecemeal [configure] calls. Loads [BillingSdkConfig.publicKeyAsset]
+  /// when set and [BillingSdkConfig.publicKeyPem] is null.
+  static Future<void> configureFrom(BillingSdkConfig config) async {
+    _config = config;
+    var pem = config.publicKeyPem?.trim();
+    if ((pem == null || pem.isEmpty) &&
+        config.publicKeyAsset != null &&
+        config.publicKeyAsset!.trim().isNotEmpty) {
+      pem = await loadPublicKeyFromAsset(config.publicKeyAsset!.trim());
+    }
+    if (pem == null || pem.isEmpty) {
+      throw StateError(
+        'BillingSdk.configureFrom: provide publicKeyPem or publicKeyAsset.',
+      );
+    }
+    configure(billingApiBaseUrl: config.apiBaseUrl, publicKeyPem: pem);
   }
 
   static Future<void> configureWithAsset({
@@ -68,6 +94,19 @@ class BillingSdk {
     configure(billingApiBaseUrl: billingApiBaseUrl, publicKeyPem: pem);
   }
 
+  /// Test-only configure that installs the SDK unit-test public key when
+  /// [publicKeyPem] is omitted. Production hosts must use [configure] /
+  /// [configureFrom] with their real license public key.
+  static void configureForTesting({
+    String? billingApiBaseUrl,
+    String? publicKeyPem,
+  }) {
+    configure(
+      billingApiBaseUrl: billingApiBaseUrl,
+      publicKeyPem: publicKeyPem ?? defaultPublicKeyPem,
+    );
+  }
+
   static void resetForTesting() {
     _billingApiBaseUrl = null;
     _publicKeyPem = null;
@@ -75,6 +114,7 @@ class BillingSdk {
     _apiClient = null;
     _currentPayload = null;
     _loadedKeyFingerprint = null;
+    _config = null;
   }
 
   static String? getJwtAlg(String signedToken) {
@@ -92,7 +132,14 @@ class BillingSdk {
   }
 
   static TokenVerifier get _verifierOrThrow {
-    return _verifier ??= TokenVerifier(publicKeyPem: _publicKeyPem ?? defaultPublicKeyPem);
+    final pem = _publicKeyPem;
+    if (pem == null || pem.trim().isEmpty) {
+      throw StateError(
+        'BillingSdk: call configure(...) or configureFrom(...) with a '
+        'license public key before verifying tokens.',
+      );
+    }
+    return _verifier ??= TokenVerifier(publicKeyPem: pem);
   }
 
   static BillingApiClient get _apiClientOrThrow {

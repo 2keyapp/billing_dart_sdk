@@ -82,11 +82,11 @@ class _BillingExamplePageState extends State<BillingExamplePage> {
       }
     } on FormatException catch (e) {
       debugPrint('[BillingExample] Init: asset invalid — ${e.message}');
-      BillingSdk.configure(billingApiBaseUrl: baseUrl);
+      BillingSdk.configureForTesting(billingApiBaseUrl: baseUrl);
     } catch (e, st) {
       debugPrint('[BillingExample] Init: asset load failed — $e');
       debugPrint(st.toString());
-      BillingSdk.configure(billingApiBaseUrl: baseUrl);
+      BillingSdk.configureForTesting(billingApiBaseUrl: baseUrl);
     }
 
     debugPrint(

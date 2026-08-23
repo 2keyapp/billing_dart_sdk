@@ -20,8 +20,8 @@ String _createCanonicalBillingToken({Duration? expiresIn}) {
   final jwt = JWT(
     {
       'payload_version': 1,
-      'iss': 'https://billing.scomm.ai',
-      'aud': 'scomm',
+      'iss': 'https://billing.example.com',
+      'aud': 'billing',
       'iat': iat,
       'exp': exp,
       'paying_party': {
@@ -50,9 +50,8 @@ String _createCanonicalBillingToken({Duration? expiresIn}) {
 void main() {
   group('BillingSdk', () {
     setUp(() {
-      BillingSdk.configure(
+      BillingSdk.configureForTesting(
         billingApiBaseUrl: 'https://billing.example.com',
-        publicKeyPem: null, // use default (matches test key)
       );
     });
 
@@ -122,10 +121,21 @@ void main() {
       });
 
       test('with empty authorizationToken returns SyncFailure', () async {
-        BillingSdk.configure(billingApiBaseUrl: 'https://billing.example.com/');
+        BillingSdk.configureForTesting(
+          billingApiBaseUrl: 'https://billing.example.com/',
+        );
         final result = await BillingSdk.syncFromServer(authorizationToken: '');
         expect(result, isA<SyncFailure>());
         expect((result as SyncFailure).message, contains('token'));
+      });
+
+      test('verify without public key throws', () {
+        BillingSdk.resetForTesting();
+        BillingSdk.configure(billingApiBaseUrl: 'https://billing.example.com');
+        expect(
+          () => BillingSdk.verifyAndDecode('a.b.c'),
+          throwsStateError,
+        );
       });
     });
 

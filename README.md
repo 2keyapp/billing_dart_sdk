@@ -48,54 +48,67 @@ flutter pub get   # or dart pub get
 ```dart
 import 'package:billing_dart_sdk/billing_dart_sdk.dart';
 
-await BillingSdk.configureWithAsset(
-  billingApiBaseUrl: 'https://billing.example.com',
+const config = BillingSdkConfig(
+  apiBaseUrl: 'https://billing.example.com',
+  deepLinkScheme: 'myapp',
+  storagePrefix: 'billing_myapp',
   publicKeyAsset: 'keys/billing_public.pem',
+  portalBaseUrl: 'https://billing.example.com', // optional; defaults to apiBaseUrl
 );
+
+await BillingSdk.configureFrom(config);
 ```
 
-- `billingApiBaseUrl` — billing **origin** (e.g. `https://billing.example.com`). The SDK calls `/api/v1/*` internally.
-- `publicKeyPem` / asset — EC public key (ES256) to verify **license** JWTs from `GET /api/v1/license`.
+| Option | Description |
+|--------|-------------|
+| `apiBaseUrl` | Billing host origin (required). |
+| `deepLinkScheme` | OAuth callback scheme (required), e.g. `myapp`. |
+| `storagePrefix` | Shared namespace for auth + session storage (required). |
+| `publicKeyPem` / `publicKeyAsset` | EC PEM for license JWT verification (ES256). |
+| `portalBaseUrl` | Portal/shop origin (optional). |
+| `shopPath` | Marketplace path (default `/shop`). |
+| `addonPlanNameHints` | Host product plan-name map (default empty). |
 
-### 2. Auth (Better Auth)
+### 2. Auth
 
-Billing hosts Better Auth at `/api/auth`. [BillingAuthClient](lib/src/auth/billing_auth_client.dart) wraps the official `better_auth` Flutter SDK against your billing server. Host apps never import `better_auth` — only `billing_dart_sdk`.
+Billing hosts auth at `/api/auth`. [BillingAuthClient](lib/src/auth/billing_auth_client.dart) wraps it. Host apps never import `better_auth` — only `billing_dart_sdk`.
 
 ```dart
-final auth = BillingAuthClient(
-  billingBaseUrl: 'https://billing.example.com',
-  deepLinkScheme: 'scomm',
-  storage: SecureBillingAuthStorage(storagePrefix: 'billing_scomm'),
+final auth = BillingAuthClient.fromConfig(
+  config,
   sessionLauncher: ({required authorizationUrl, required callbackUrl}) async {
-    // e.g. flutter_web_auth_2 for Google/Microsoft
+    // Host OAuth browser / loopback / deep-link flow
     ...
   },
 );
+auth.setOnline(false); // refresh session explicitly instead of background poll
 
-// Optional: disable built-in session polling (refresh explicitly instead)
-auth.setOnline(false);
+final session = BillingSession(
+  store: SecureBillingSessionStore(storagePrefix: config.storagePrefix),
+);
 
-// 1) Sign in (Better Auth session on billing server)
+// 1) Sign in
 await auth.signInSocial(provider: 'google');
 
-// 2) Mint billing API JWT for /api/v1/*
+// 2) Mint billing API JWT + persist (merges session profile when JWT omits sub/email)
 final tokens = await auth.acquireApiToken();
+final authSession = await auth.getSession();
+await session.persistAfterSignIn(
+  accountKey: authSession!.user.id,
+  sessionUser: authSession.user,
+  tokens: tokens,
+  loginProvider: 'google',
+);
+await session.syncOnlineForAccount(accountKey: authSession.user.id);
 
-// 3) Persist + sync license
-await session.persistAuthTokens(accountKey: userId, tokens: tokens);
-await session.syncOnlineForAccount(accountKey: userId);
-
-// Re-mint JWT when near expiry:
-await auth.refreshApiToken();
-
-// Open billing portal in browser (session handoff):
+// Portal handoff:
 final handoffUrl = await auth.createPortalHandoffUrl(
-  portalBaseUrl: 'https://portal.example.com',
+  portalBaseUrl: config.resolvedPortalBaseUrl,
   redirectPath: '/subscriptions',
 );
 ```
 
-Register `scomm://` in `AUTH_FLUTTER_DEEP_LINK_SCHEMES` on the billing server and deep-link intent filters on Android / URL types on iOS (social OAuth callbacks).
+Register `{scheme}://` in `AUTH_FLUTTER_DEEP_LINK_SCHEMES` on the billing server and deep-link intent filters on Android / URL types on iOS.
 
 ### Discover enabled login options
 
@@ -209,10 +222,15 @@ Server: `better-auth` + `@better-auth/flutter` on the billing app at `/api/auth`
 
 | Option | Description |
 |--------|-------------|
-| `billingApiBaseUrl` | Billing host origin (required for API calls). |
-| `publicKeyPem` | EC PEM for license JWT verification (ES256). |
-| `publicKeyPath` | Load PEM from disk (not on web). |
-| `publicKeyAsset` | Flutter asset path (recommended; avoid `assets/` prefix on web). |
+| `BillingSdkConfig.apiBaseUrl` | Billing host origin (required for API calls). |
+| `BillingSdkConfig.deepLinkScheme` | OAuth deep-link scheme (required). |
+| `BillingSdkConfig.storagePrefix` | Shared auth + session key prefix (required). |
+| `BillingSdkConfig.publicKeyPem` / `publicKeyAsset` | EC PEM for license JWT verification (ES256). |
+| `BillingSdkConfig.portalBaseUrl` | Portal origin (optional; defaults to apiBaseUrl). |
+| `BillingSdkConfig.shopPath` | Shop path (default `/shop`). |
+| `BillingSdkConfig.addonPlanNameHints` | Host product plan-name hints (default empty). |
+
+Use [SecureBillingSessionStore] for persistence (or implement [BillingSessionStore]).
 
 ---
 

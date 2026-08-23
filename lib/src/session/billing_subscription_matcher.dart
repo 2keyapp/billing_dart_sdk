@@ -2,12 +2,10 @@ import '../models/billing_subscription.dart';
 import '../models/billing_token_payload.dart';
 
 /// Plan-name hints when JWT only has numeric [BillingSubscription.planId].
-const Map<String, List<String>> defaultAddonRefPlanNameHints = {
-  'ai_assistant': ['local-ai', 'local ai', 'ai assistant'],
-  'scomm_connector': ['scomm connect', 'scomm connector', 'connector'],
-  'linux': ['linux'],
-  'accent_color': ['accent', 'colour', 'color', 'custom colour'],
-};
+///
+/// Empty by default — host apps supply product-specific maps via
+/// [BillingSdkConfig.addonPlanNameHints] or the [planNameHints] parameter.
+const Map<String, List<String>> defaultAddonRefPlanNameHints = {};
 
 /// True when [subscription] is an active seat for stable billing code [addonRef].
 bool billingSubscriptionMatchesAddonRef(

@@ -1,6 +1,7 @@
 import 'package:better_auth/better_auth.dart' as ba;
 
 import '../api/billing_api_client.dart';
+import '../config/billing_sdk_config.dart';
 import '../logging/sdk_logger.dart';
 import 'billing_api_token_mint.dart';
 import 'billing_auth_discovery.dart';
@@ -40,10 +41,17 @@ class BillingAuthClient {
     required String billingBaseUrl,
     required String deepLinkScheme,
     required BillingAuthStorage storage,
+    required this.storagePrefix,
     AuthSessionLauncher? sessionLauncher,
-    this.storagePrefix = 'billing_scomm',
   })  : _origin = normalizeBillingApiBaseUrl(billingBaseUrl),
         deepLinkScheme = deepLinkScheme {
+    if (storagePrefix.trim().isEmpty) {
+      throw ArgumentError.value(
+        storagePrefix,
+        'storagePrefix',
+        'Must be a non-empty namespace shared with SecureBillingAuthStorage.',
+      );
+    }
     final base = _origin.endsWith('/') ? _origin : '$_origin/';
     _authClient = ba.createAuthClient(
       baseUrl: base,
@@ -62,6 +70,25 @@ class BillingAuthClient {
       ),
     );
     _tokenMint = BillingApiTokenMint(authBaseUrl: authBaseUrl);
+  }
+
+  /// Builds a client from [BillingSdkConfig].
+  ///
+  /// When [storage] is omitted, uses [SecureBillingAuthStorage] with
+  /// [BillingSdkConfig.storagePrefix].
+  factory BillingAuthClient.fromConfig(
+    BillingSdkConfig config, {
+    BillingAuthStorage? storage,
+    AuthSessionLauncher? sessionLauncher,
+  }) {
+    return BillingAuthClient(
+      billingBaseUrl: config.apiBaseUrl,
+      deepLinkScheme: config.deepLinkScheme,
+      storagePrefix: config.storagePrefix,
+      storage: storage ??
+          SecureBillingAuthStorage(storagePrefix: config.storagePrefix),
+      sessionLauncher: sessionLauncher,
+    );
   }
 
   final String _origin;
@@ -185,8 +212,12 @@ class BillingAuthClient {
   Future<Uri> createPortalHandoffUrl({
     required String portalBaseUrl,
     String? redirectPath,
+    String shopPath = '/shop',
   }) async {
-    final portalUrls = BillingPortalUrls(portalBaseUrl: portalBaseUrl);
+    final portalUrls = BillingPortalUrls(
+      portalBaseUrl: portalBaseUrl,
+      shopPath: shopPath,
+    );
     final target = portalUrls.sessionHandoff(redirectPath: redirectPath);
     final result = await _authClient.createSessionHandoffUrl(
       targetUrl: target.toString(),

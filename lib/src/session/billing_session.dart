@@ -2,7 +2,9 @@ import 'dart:async';
 
 import '../api/billing_api_client.dart';
 import '../auth/auth_user_profile.dart';
+import '../auth/billing_auth_session.dart';
 import '../auth/billing_auth_tokens.dart';
+import '../auth/billing_profile_merge.dart';
 import '../exceptions/billing_sync_error.dart';
 import '../models/billing_token_error.dart';
 import '../models/billing_token_payload.dart';
@@ -93,6 +95,35 @@ class BillingSession {
     );
     final session = BillingAccountSession(
       authTokens: tokens,
+      userProfile: profile,
+      updatedAt: DateTime.now().toUtc(),
+    );
+    await _store.writeAccountSession(accountKey, session);
+    _cachedSession = session;
+    return session;
+  }
+
+  /// Merges session-user profile into tokens, then persists for [accountKey].
+  ///
+  /// Use after social / email sign-in when the billing API JWT may omit `sub`
+  /// or email claims that only exist on the auth session user.
+  Future<BillingAccountSession> persistAfterSignIn({
+    required String accountKey,
+    required BillingAuthSessionUser sessionUser,
+    required BillingAuthTokens tokens,
+    String? loginProvider,
+  }) async {
+    final profile = billingProfileFromSignIn(
+      sessionUser: sessionUser,
+      tokens: tokens,
+      loginProvider: loginProvider,
+    );
+    final enriched = billingTokensWithProfileIdToken(
+      tokens: tokens,
+      profile: profile,
+    );
+    final session = BillingAccountSession(
+      authTokens: enriched,
       userProfile: profile,
       updatedAt: DateTime.now().toUtc(),
     );
