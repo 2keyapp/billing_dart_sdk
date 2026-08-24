@@ -4,7 +4,7 @@ Dart SDK for **using-party client apps** (e.g. Scomm): embedded billing auth, li
 
 A Flutter example app is included for local development and manual testing.
 
-**Architecture & roadmap:** [billing/LICENSE_SYNC_AND_SDK_PLAN.md](../billing/LICENSE_SYNC_AND_SDK_PLAN.md)
+**Architecture & roadmap:** [2key-billing-sdks](https://github.com/2keyapp/2key-billing-sdks) (canonical) · [docs/2key-billing-sdk-architecture.md](docs/2key-billing-sdk-architecture.md) (legacy copy) · [Rust-core proposal](docs/proposals/add-rust-core-sdk/proposal.md) · [billing/LICENSE_SYNC_AND_SDK_PLAN.md](../billing/LICENSE_SYNC_AND_SDK_PLAN.md)
 
 ---
 
@@ -253,4 +253,6 @@ flutter run   # Flutter example app
 ```
 
 - **[PLAN.md](PLAN.md)** — historical SDK design notes (partially superseded)
+- **[docs/2key-billing-sdk-architecture.md](docs/2key-billing-sdk-architecture.md)** — multi-SDK / Rust-core architecture
+- **[docs/proposals/add-rust-core-sdk/](docs/proposals/add-rust-core-sdk/proposal.md)** — Rust core + wrappers + browser SDK proposal (awaiting approval)
 - **[billing/LICENSE_SYNC_AND_SDK_PLAN.md](../billing/LICENSE_SYNC_AND_SDK_PLAN.md)** — current architecture, polling, Better Auth roadmap

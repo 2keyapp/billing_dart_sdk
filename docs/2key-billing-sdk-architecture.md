@@ -1,8 +1,11 @@
 # 2key Billing — Multi-SDK Architecture & Repository Plan
 
-**Status:** Proposed  
-**Reference implementation:** `billing_dart_sdk` → rename to **`2key_dart_sdk`**  
-**Last updated:** 2026-08-23  
+**Status:** Superseded as source of truth by monorepo  
+**Canonical docs:** [`2keyapp/2key-billing-sdks`](https://github.com/2keyapp/2key-billing-sdks) → `docs/architecture.md`  
+**Native reference:** **`2key_core` (Rust)** in that monorepo  
+**Browser reference:** **`@2key/ts-sdk`**  
+**Dart today:** this repo (`billing_dart_sdk`) → migrate to **`2key_dart_sdk`** under the monorepo  
+**Last updated:** 2026-08-24  
 
 ---
 
@@ -13,7 +16,8 @@ This document defines how 2key Billing is structured across repositories so that
 1. **Better Auth** stays a continuously syncable upstream fork (auth engine only).
 2. **2key Billing server** stays a **private** product (license, usage, mTLS M2M, entitlements, etc.).
 3. **Public SDKs** exist per language, named consistently as **`2key_<lang>_sdk`**.
-4. **`2key_dart_sdk`** (today: `billing_dart_sdk`) is the **reference implementation** every other SDK must match in behavior and API shape.
+4. **Native clients** share one behavioral core — **`2key_core` (Rust)** — with thin language wrappers (Dart, CLI, Kotlin, Swift, …).
+5. **Browser clients** use a first-class **TypeScript SDK** with the same OpenAPI + conformance fixtures (not a WASM wrapper of Rust as the product API).
 
 ---
 
@@ -31,17 +35,19 @@ This document defines how 2key Billing is structured across repositories so that
 
 | Language / runtime | Package name | Registry |
 |--------------------|--------------|----------|
-| Dart / Flutter | **`2key_dart_sdk`** | pub (or git until published) |
-| TypeScript (browser + isomorphic fetch) | **`2key_ts_sdk`** / `@2key/ts-sdk` | npm |
+| Rust core (native reference) | **`2key_core`** | crates.io or git (not imported by apps) |
+| CLI | **`2key_cli`** | binary / crates |
+| Dart / Flutter | **`2key_dart_sdk`** (wraps `2key_core` via FRB) | pub (or git until published) |
+| TypeScript (browser) | **`2key_ts_sdk`** / `@2key/ts-sdk` | npm |
 | TypeScript React helpers (optional) | **`2key_react_sdk`** / `@2key/react-sdk` | npm |
-| Kotlin (Android / JVM) | **`2key_kotlin_sdk`** | Maven |
-| Swift (iOS / macOS) | **`2key_swift_sdk`** | SPM |
+| Kotlin (Android / JVM) | **`2key_kotlin_sdk`** (UniFFI → `2key_core`) | Maven |
+| Swift (iOS / macOS) | **`2key_swift_sdk`** (UniFFI → `2key_core`) | SPM |
 | Python | **`2key_python_sdk`** | PyPI |
 | Node server (service / M2M helpers) | **`2key_node_sdk`** / `@2key/node-sdk` | npm |
 | C# (later) | **`2key_dotnet_sdk`** | NuGet |
 | Go (later) | **`2key_go_sdk`** | module |
 
-**Rule:** Always `2key_<lang>_sdk`. Never `billing_*` or `better_auth_*` as the public product package name.
+**Rule:** Always `2key_<lang>_sdk` for host-facing packages. Never `billing_*` or `better_auth_*` as the public product package name. Apps never depend on `2key_core` directly.
 
 ### 2.3 Private packages (never published publicly)
 
@@ -70,16 +76,17 @@ This document defines how 2key Billing is structured across repositories so that
 
 - Continuous sync of `2keyapp/better-auth` from upstream `better-auth/better-auth`.
 - Rapid product development (usage-based billing, mTLS M2M, etc.) **without** blocking on upstream merges.
-- One **behavioral contract** for all SDKs, with **`2key_dart_sdk` as reference**.
+- One **native behavioral core** (`2key_core`) + **browser TS SDK** + shared OpenAPI/fixtures.
 - Private IP in server-side packages; public SDKs are HTTP + local crypto (license verify) only.
-- Host apps (e.g. Scomm / secMail) depend on **`2key_dart_sdk` only** — never on `better_auth` directly.
+- Host apps (e.g. Scomm / secMail) depend on **`2key_dart_sdk` only** — never on `better_auth` or `2key_core` directly.
 
 ### 3.2 Non-goals
 
 - Turning Better Auth into “2key Billing” by forking large product features into the auth repo.
 - Publishing private billing-core to npm/pub.
-- Building separate desktop SDKs when Flutter / `2key_dart_sdk` already covers desktop.
+- Using WASM/`2key_core` as the **product** browser API (optional JWT-verify WASM later is fine).
 - Requiring every language to reimplement proprietary metering logic client-side.
+- Replacing Better Auth with a Rust auth engine on day one.
 
 ---
 
@@ -88,7 +95,7 @@ This document defines how 2key Billing is structured across repositories so that
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │ PUBLIC CLIENTS                                                   │
-│  Scomm (2key_dart_sdk) · Portal (2key_ts_sdk) · future apps     │
+│  Scomm (2key_dart_sdk) · CLI · Portal (2key_ts_sdk) · natives   │
 └────────────────────────────┬─────────────────────────────────────┘
                              │ HTTPS
                              ▼
@@ -102,7 +109,7 @@ This document defines how 2key Billing is structured across repositories so that
                              ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │ PUBLIC FORK: 2keyapp/better-auth                                 │
-│  upstream sync · native plugin · Dart auth client (low-level)    │
+│  upstream sync · native plugin · low-level auth clients          │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -110,45 +117,52 @@ This document defines how 2key Billing is structured across repositories so that
 flowchart TB
   subgraph public_clients["Public client apps"]
     Scomm["Scomm / secMail\n(2key_dart_sdk)"]
+    Cli["2key_cli"]
     Portal["Billing portal\n(2key_ts_sdk)"]
     Future["Future apps\n(Kotlin / Swift / …)"]
   end
 
   subgraph public_sdks["Public: 2key-billing-sdks"]
-    DartSDK["packages/dart\n2key_dart_sdk ★ REFERENCE"]
-    BrowserSDK["packages/ts\n2key_ts_sdk"]
+    Core["crates/2key_core ★ NATIVE REF"]
+    DartSDK["packages/dart\n2key_dart_sdk FRB"]
+    BrowserSDK["packages/ts\n2key_ts_sdk ★ BROWSER REF"]
     OpenAPI["openapi/\n2key-billing.yaml"]
+    Fixtures["conformance/fixtures"]
   end
 
   subgraph private_server["Private: 2key-billing-server"]
-    API["/api/v1/*\nlicense, usage, plans, mTLS"]
-    AuthHost["/api/auth/*\nBetter Auth host"]
-    Core["@2key/billing-core"]
+    API["/api/v1/*"]
+    AuthHost["/api/auth/*"]
+    CorePkg["@2key/billing-core"]
     MTLS["@2key/billing-mtls"]
   end
 
   subgraph auth_fork["Public fork: 2keyapp/better-auth"]
-    BA["better-auth core\n(sync from upstream)"]
+    BA["better-auth core"]
     NativePlugin["@2key/auth-native"]
-    DartAuth["packages/clients/dart\n(low-level auth client)"]
   end
 
   Scomm --> DartSDK
+  DartSDK --> Core
+  Cli --> Core
+  Future --> Core
   Portal --> BrowserSDK
-  Future --> OpenAPI
+  Core --> OpenAPI
+  BrowserSDK --> OpenAPI
+  Core --> Fixtures
+  BrowserSDK --> Fixtures
 
-  DartSDK --> DartAuth
-  DartSDK --> API
   DartSDK --> AuthHost
-  BrowserSDK --> API
   BrowserSDK --> AuthHost
+  Core --> API
+  BrowserSDK --> API
 
   AuthHost --> BA
   AuthHost --> NativePlugin
-  API --> Core
+  API --> CorePkg
   API --> MTLS
-  AuthHost --> Core
-  Core --> BA
+  AuthHost --> CorePkg
+  CorePkg --> BA
 ```
 
 ### 4.1 Dependency rules (hard)
@@ -156,8 +170,11 @@ flowchart TB
 | From → To | Allowed? |
 |-----------|----------|
 | Public SDK → billing-server | HTTPS only |
-| Public SDK → better-auth Dart client | Yes, **inside SDK only**; not re-exported to apps |
+| Language wrapper → `2key_core` | Yes (native path only) |
+| Host app → `2key_core` / Better Auth | **No** |
+| Public SDK → better-auth client | Yes, **inside SDK only**; not re-exported to apps |
 | Public SDK → `@2key/billing-core` | **No** |
+| Browser SDK → `2key_core` / WASM as product API | **No** (protocol parity only) |
 | billing-server → better-auth fork | Yes |
 | better-auth fork → billing-server | **No** |
 | Public SDK repo → private server source | **No** (OpenAPI export only) |
@@ -233,53 +250,61 @@ better-auth/
 │   └── 2key-billing.yaml            # /api/v1 source of truth
 ├── docs/
 │   ├── auth-protocol.md             # browser vs native auth
-│   ├── sdk-conformance.md           # how to match 2key_dart_sdk
-│   └── architecture.md              # this document (or link)
+│   ├── sdk-conformance.md           # match 2key_core + fixtures
+│   ├── architecture.md              # this document (or link)
+│   └── proposals/                   # OpenSpec-style change proposals
 ├── conformance/
 │   ├── fixtures/                    # license JWTs, ETag cases, usage events
 │   └── suites/                      # language-agnostic test vectors
+├── crates/
+│   ├── 2key_core/                   # ★ NATIVE REFERENCE
+│   └── 2key_cli/                    # thin CLI on 2key_core
+├── bindings/                        # UniFFI / shared FFI scaffolding
 ├── packages/
-│   ├── dart/                        # ★ REFERENCE: 2key_dart_sdk
-│   ├── ts/                          # 2key_ts_sdk
+│   ├── dart/                        # 2key_dart_sdk (FRB → 2key_core)
+│   ├── ts/                          # ★ BROWSER REFERENCE: 2key_ts_sdk
 │   ├── react/                       # 2key_react_sdk (optional)
 │   ├── node/                        # 2key_node_sdk (optional M2M/service)
-│   ├── kotlin/                      # 2key_kotlin_sdk (later)
-│   ├── swift/                       # 2key_swift_sdk (later)
-│   └── python/                      # 2key_python_sdk (later)
+│   ├── kotlin/                      # UniFFI wrapper (later)
+│   ├── swift/                       # UniFFI wrapper (later)
+│   └── python/                      # later
 └── examples/
-    ├── flutter_app/                 # mirrors Scomm patterns at small scale
-    └── browser_vite/
+    ├── flutter_app/
+    ├── browser_vite/
+    └── cli_smoke/
 ```
 
-**Migration:** move/rename current `billing_dart_sdk` → `2key-billing-sdks/packages/dart` (or keep a standalone repo named `2key_dart_sdk` that remains the reference; **monorepo preferred** for shared conformance).
+**Migration:** move/rename current `billing_dart_sdk` → `2key-billing-sdks/packages/dart`. **Monorepo preferred** for shared conformance + `2key_core`. Detailed Rust plan: [proposals/add-rust-core-sdk](proposals/add-rust-core-sdk/proposal.md).
 
 ---
 
-## 6. Reference implementation: `2key_dart_sdk`
+## 6. Native reference: `2key_core` (+ Dart wrapper)
 
 ### 6.1 Role
 
-Every other SDK **must** implement the same capabilities, error semantics, and lifecycle as **`2key_dart_sdk`**.
+- **`2key_core` (Rust)** is the **native behavioral reference**: license verify/sync, session orchestration, errors, poll policy.
+- **`2key_ts_sdk`** is the **browser behavioral reference** (same OpenAPI + fixtures; cookie/redirect auth).
+- **`2key_dart_sdk`** is the **first production wrapper** (FRB) and Scomm/secMail **integration canary**. Until Rust parity is proven, Dart remains the interim reference for claim names and flows extracted into fixtures.
 
-Dart is reference because:
+Dart remains valuable because:
 
 - It is production-proven in Scomm / secMail.
-- It already covers native OAuth launcher, session, license sync, polling, portal handoff.
-- Hardest platform cases (desktop loopback, mobile deep links) are already solved here.
+- Hardest platform cases (desktop loopback, mobile deep links) are already solved in the Dart auth adapter.
+- Dual-path migration (pure Dart → Rust) reduces cutover risk.
 
-### 6.2 Current code map (`billing_dart_sdk` → reference modules)
+### 6.2 Current code map (`billing_dart_sdk` → core / wrapper)
 
-| Current module | Responsibility | Required in all SDKs? |
-|----------------|----------------|------------------------|
-| `BillingAuthClient` | Identity: social/email, session, API JWT mint, portal handoff | Yes (platform auth adapter differs) |
-| `SecureBillingAuthStorage` | Persist auth session secrets | Yes (platform storage) |
-| `BillingSession` | Orchestrate tokens + license + sync + poll | Yes |
-| `BillingSessionStore` / token store | Persistence ports | Yes (interfaces) |
-| `BillingSdk` (static) | License verify, sync, catalog, payload | Yes — **prefer instance API** in new SDKs; Dart should migrate |
-| `AuthUserProfile` / `BillingAuthTokens` | Shared models | Yes (same fields) |
-| `BillingAccountSession` | Persisted account snapshot | Yes |
-| Plan catalog / entitlements helpers | Read models | Yes |
-| Profile merge / unsigned id_token enrichment (today partly in host apps) | **Move into Dart SDK** | Yes — must not remain host-app-only |
+| Current module | Responsibility | Lands in |
+|----------------|----------------|----------|
+| `BillingAuthClient` | Identity: social/email, session, API JWT mint, portal handoff | Wrapper auth adapter (Phase A Dart Better Auth; ports into core session) |
+| `SecureBillingAuthStorage` | Persist auth session secrets | Platform `Storage` port |
+| `BillingSession` | Orchestrate tokens + license + sync + poll | **`2key_core`** |
+| `BillingSessionStore` / token store | Persistence ports | Traits in core + platform impls |
+| `BillingSdk` (static) | License verify, sync, catalog, payload | **`2key_core`** — instance API preferred |
+| `AuthUserProfile` / `BillingAuthTokens` | Shared models | Core models + wrapper types |
+| `BillingAccountSession` | Persisted account snapshot | **`2key_core`** |
+| Plan catalog / entitlements helpers | Read models | **`2key_core`** |
+| Profile merge / JWT enrichment | Sign-in persist helpers | Core or wrapper (must not stay host-only) |
 
 ### 6.3 Public Dart package surface (target)
 
@@ -291,24 +316,36 @@ import 'package:2key_dart_sdk/2key_dart_sdk.dart';
 
 **Must export:** session, auth client facade, license/entitlement APIs, catalog, portal URLs, store interfaces, stable models, `AuthSessionLauncher` (or equivalent callback typedef).
 
-**Must not export:** Better Auth `SessionData`, `AuthClient`, raw plugin types (unless behind an `advanced/` library and discouraged).
+**Must not export:** Better Auth `SessionData`, `AuthClient`, raw plugin types, or Rust/FFI types (unless behind an `advanced/` library and discouraged).
 
-**Internal dependency:**
+**Internal dependencies (target):**
 
 ```yaml
 # packages/dart/pubspec.yaml
 name: 2key_dart_sdk
 dependencies:
-  better_auth:
+  better_auth:          # Phase A auth only — internal
     git:
       url: https://github.com/2keyapp/better-auth.git
       ref: <PINNED_SHA>
-      path: packages/clients/dart   # or packages/flutter/dart until moved
+      path: packages/clients/dart
+# Native logic via flutter_rust_bridge → 2key_core (not a pub dep apps see)
 ```
 
-### 6.4 Capabilities checklist (conformance)
+### 6.4 Bindings
 
-Every `2key_*_sdk` MUST support:
+| Consumer | Binding |
+|----------|---------|
+| Dart / Flutter | flutter_rust_bridge over a stable Rust facade |
+| CLI | Direct Rust (`2key_cli`) |
+| Kotlin / Swift | UniFFI from the same facade |
+| Browser | TypeScript only — no product FFI/WASM |
+
+See [design.md](proposals/add-rust-core-sdk/design.md) for rationale.
+
+### 6.5 Capabilities checklist (conformance)
+
+Every `2key_*_sdk` (and `2key_core`) MUST support:
 
 1. **Configure** — API base URL + license public key (PEM).
 2. **Sign-in** — social (and email if enabled); platform-specific launcher.
@@ -325,13 +362,14 @@ Every `2key_*_sdk` MUST support:
 13. **Usage reporting** (when API ships) — `POST /api/v1/usage/events` (or equivalent).
 14. **M2M** (when API ships) — mTLS or machine-token flows as documented (Node/Kotlin may lead; Dart if needed).
 
-### 6.5 Platform adapters (per SDK)
+### 6.6 Platform adapters (per SDK)
 
-| Concern | Dart (reference) | Browser TS | Kotlin | Swift |
-|---------|------------------|------------|--------|-------|
-| OAuth UI | `AuthSessionLauncher` + app loopback/deep link | Redirect + cookies | Custom Tabs | ASWebAuthenticationSession |
-| Storage | `flutter_secure_storage` / app-provided | `localStorage` / cookie jar | EncryptedSharedPreferences / Keystore | Keychain |
-| mTLS | Optional (`dart:io`) | Limited in pure browser; use Node SDK | Strong | Strong |
+| Concern | Dart (FRB wrapper) | Browser TS | CLI | Kotlin / Swift |
+|---------|--------------------|------------|-----|----------------|
+| OAuth UI | `AuthSessionLauncher` + loopback/deep link | Redirect + cookies | Device/loopback/pasted token | Custom Tabs / ASWebAuthenticationSession |
+| Storage | flutter_secure_storage / app-provided | localStorage / cookie jar | OS keyring | Keystore / Keychain |
+| Billing logic | **`2key_core`** | Pure TS | **`2key_core`** | **`2key_core`** (UniFFI) |
+| mTLS | Optional later | Limited | Strong (lead) | Strong |
 
 ---
 
@@ -365,7 +403,7 @@ Initial groups (extend as features land):
 
 - Algorithm: ES256.
 - Public key distributed to SDKs (asset/PEM); **private key only on server**.
-- Payload fields: subscriptions, addons, expiry, account ids — match Dart decoder as reference.
+- Payload fields: subscriptions, addons, expiry, account ids — match **conformance fixtures** (extracted from current Dart decoder).
 
 ---
 
@@ -392,7 +430,7 @@ Initial groups (extend as features land):
 | Metered entitlements gating | billing-core | |
 | Invoicing / credits | billing-core | |
 | SDK `reportUsage()` | all `2key_*_sdk` | Thin HTTP |
-| SDK mTLS helper | `2key_node_sdk`, Kotlin, Swift first | Browser limited |
+| SDK mTLS helper | `2key_cli`, `2key_node_sdk`, Kotlin, Swift first | Browser limited; logic in `2key_core` where applicable |
 
 ### 8.3 Auth vs machine identity
 
@@ -471,34 +509,38 @@ Do **not** force M2M through Better Auth sessions unless a future generic plugin
 ```
 Upstream BA ──weekly merge──► better-auth fork ──pin──► billing-auth-host
                                       │
-                                      └──pin──► 2key_dart_sdk (internal better_auth)
+                                      └──pin──► 2key_dart_sdk auth adapter (internal better_auth)
 
 Daily: billing-core / billing-mtls / billing-api  (no fork required)
-Then: OpenAPI bump → update 2key_dart_sdk (reference) → port to 2key_ts_sdk etc.
+Then: OpenAPI bump → update 2key_core + fixtures → wrappers + 2key_ts_sdk
 ```
 
 ---
 
-## 10. How other SDKs are built from the Dart reference
+## 10. How other SDKs are built
 
 ### 10.1 Process
 
-1. Change or document behavior in **`2key_dart_sdk`** + conformance fixtures.
+1. Change behavior in **`2key_core`** (native) and/or **`2key_ts_sdk`** (browser) + conformance fixtures.
 2. Update **OpenAPI** if `/api/v1` changed.
-3. Port to next SDK using `docs/sdk-conformance.md` checklist.
-4. CI: run language tests + shared fixture vectors.
+3. Regenerate / update wrappers (Dart FRB, UniFFI, CLI).
+4. CI: Rust tests + Dart canary + TS + shared fixture vectors.
 5. No SDK may invent divergent license claim names or sync semantics.
+
+During migration, extract fixtures from current Dart tests first, then implement Rust to match.
 
 ### 10.2 Priority order
 
-| Priority | SDK | Consumer |
-|----------|-----|----------|
-| P0 | **`2key_dart_sdk`** | Scomm / secMail (reference) |
+| Priority | Component | Consumer |
+|----------|-----------|----------|
+| P0 | OpenAPI + conformance fixtures | All |
+| P0 | **`2key_core`** | Native reference |
+| P0 | **`2key_dart_sdk`** (FRB wrapper) | Scomm / secMail canary |
 | P0 | **`2key_ts_sdk`** | billing-portal, web |
+| P1 | **`2key_cli`** | Headless / ops smoke |
 | P1 | **`2key_react_sdk`** | Portal UI hooks |
-| P1 | OpenAPI + conformance suite | All |
 | P2 | **`2key_node_sdk`** | Services, mTLS helpers |
-| P2 | **`2key_kotlin_sdk`** / **`2key_swift_sdk`** | Native non-Flutter apps |
+| P2 | **`2key_kotlin_sdk`** / **`2key_swift_sdk`** | Native non-Flutter |
 | P3 | **`2key_python_sdk`** | Scripts, ops |
 | Later | `2key_dotnet_sdk` / `2key_go_sdk` | On demand |
 
@@ -506,9 +548,9 @@ Then: OpenAPI bump → update 2key_dart_sdk (reference) → port to 2key_ts_sdk 
 
 - Depend only on **`2key_dart_sdk`**.
 - Keep in app: OAuth browser/loopback UX, domain entities (`UserEntities`), addon UI.
-- Move into SDK: profile merge from session+JWT, token enrichment, sign-in orchestration helpers.
+- Move into SDK/core: profile merge from session+JWT, token enrichment, sign-in orchestration helpers.
 - DI: single billing wiring module; app_auth and subscriptions both consume SDK types.
-- Forbid `package:better_auth` imports in the app (CI).
+- Forbid `package:better_auth` and direct Rust crate imports in the app (CI).
 
 ---
 
@@ -516,14 +558,14 @@ Then: OpenAPI bump → update 2key_dart_sdk (reference) → port to 2key_ts_sdk 
 
 ### Phase 0 — Spec lock
 
-- [ ] Adopt this document.
+- [ ] Adopt this document + [add-rust-core-sdk](proposals/add-rust-core-sdk/proposal.md) (approval gate).
 - [ ] Export initial OpenAPI from current `/api/v1`.
-- [ ] Write `auth-protocol.md` from current Flutter/native behavior.
-- [ ] List Dart public API as conformance baseline.
+- [ ] Write `auth-protocol.md` from current Flutter/native vs browser behavior.
+- [ ] Extract Dart public API + JWT/ETag cases into conformance fixtures.
 
-### Phase 1 — Rename & harden Dart reference
+### Phase 1 — Rename & harden Dart (interim reference / canary)
 
-- [ ] Rename `billing_dart_sdk` → **`2key_dart_sdk`**.
+- [ ] Rename `billing_dart_sdk` → **`2key_dart_sdk`** (timing may follow Rust dual-path — see proposal open questions).
 - [ ] Pin `better_auth` by SHA; hide Better Auth types from public API.
 - [ ] Move host-app profile/session merge logic into Dart SDK.
 - [ ] Point Scomm / secMail `pubspec` at `2key_dart_sdk`.
@@ -534,14 +576,16 @@ Then: OpenAPI bump → update 2key_dart_sdk (reference) → port to 2key_ts_sdk 
 - [ ] Ensure billing-core / auth-host boundaries in private server repo.
 - [ ] Add stubs/modules for **usage** and **mTLS** packages (even if MVP incomplete).
 
-### Phase 3 — Public SDK monorepo
+### Phase 3 — Public SDK monorepo + Rust core
 
-- [ ] Create `2key-billing-sdks` with `packages/dart` as reference.
-- [ ] Add conformance fixtures extracted from Dart tests.
+- [ ] Create `2key-billing-sdks` with `crates/2key_core`, `packages/dart`, conformance.
+- [ ] Implement `2key_core` against fixtures (see proposal tasks).
+- [ ] FRB Dart dual-path; Scomm canary; then default Rust path.
+- [ ] Ship `2key_cli` smoke.
 
 ### Phase 4 — Browser SDK
 
-- [ ] Implement **`2key_ts_sdk`** matching Dart checklist.
+- [ ] Implement **`2key_ts_sdk`** against OpenAPI + fixtures (parallel to Rust OK).
 - [ ] Migrate billing-portal to `2key_ts_sdk`.
 
 ### Phase 5 — Auth fork hygiene
@@ -554,11 +598,11 @@ Then: OpenAPI bump → update 2key_dart_sdk (reference) → port to 2key_ts_sdk 
 
 - [ ] Ship `/api/v1/usage*` in private core.
 - [ ] Ship mTLS enrollment/verify in billing-mtls.
-- [ ] Extend OpenAPI + **`2key_dart_sdk` first**, then other SDKs.
+- [ ] Extend OpenAPI + **`2key_core` first**, then wrappers + TS.
 
 ### Phase 7 — Additional languages
 
-- [ ] Kotlin / Swift / Python as needed, always against conformance suite.
+- [ ] Kotlin / Swift via UniFFI; Python as needed — always against conformance suite.
 
 ---
 
@@ -568,8 +612,8 @@ Then: OpenAPI bump → update 2key_dart_sdk (reference) → port to 2key_ts_sdk 
 |------|-------|
 | better-auth fork | Upstream merge job; unit tests; no billing-core import |
 | 2key-billing-server | API tests; license crypto; usage/mTLS tests; pin SHA check |
-| 2key-billing-sdks | Per-package tests; **conformance suite must pass for Dart**; other langs gate on same fixtures |
-| Scomm / secMail | Integration tests against `2key_dart_sdk`; forbid `package:better_auth` imports |
+| 2key-billing-sdks | `2key_core` tests; Dart FRB canary; TS tests; **shared conformance fixtures must pass** |
+| Scomm / secMail | Integration tests against `2key_dart_sdk`; forbid `package:better_auth` / direct Rust imports |
 
 ---
 
@@ -578,6 +622,7 @@ Then: OpenAPI bump → update 2key_dart_sdk (reference) → port to 2key_ts_sdk 
 | Doc | Location | Audience |
 |-----|----------|----------|
 | This architecture | `docs/2key-billing-sdk-architecture.md` (here); later `2key-billing-sdks/docs/architecture.md` | All engineers |
+| Rust-core proposal | `docs/proposals/add-rust-core-sdk/` | Approvers / implementers |
 | Auth protocol | `docs/auth-protocol.md` | SDK authors |
 | OpenAPI | `openapi/2key-billing.yaml` | SDK + server |
 | SDK conformance | `docs/sdk-conformance.md` | SDK authors |
@@ -588,34 +633,41 @@ Then: OpenAPI bump → update 2key_dart_sdk (reference) → port to 2key_ts_sdk 
 
 ## 14. Explicit non-negotiables
 
-1. **`2key_dart_sdk` is the reference** — other SDKs follow it, not the reverse.
-2. **Package names are `2key_<lang>_sdk`**.
+1. **`2key_core` + fixtures** are the **native** reference; **`2key_ts_sdk` + fixtures** are the **browser** reference — wrappers must not diverge on claims or sync semantics.
+2. **Package names are `2key_<lang>_sdk`** for host-facing SDKs; apps never depend on `2key_core` directly.
 3. **Product features (usage, mTLS, metering) live in private billing-server**, not the Better Auth fork.
 4. **Host apps never depend on `better_auth` directly**.
 5. **Fork stays mergeable** — 2key patches isolated; production pins SHAs.
 6. **Public SDKs never contain signing keys or billing-core**.
+7. **Browser product API is TypeScript**, not WASM-wrapped `2key_core`.
 
 ---
 
 ## 15. Open decisions (resolve in Phase 0)
 
-1. Monorepo `2key-billing-sdks` vs standalone `2key_dart_sdk` repo (monorepo recommended).
+1. Monorepo `2key-billing-sdks` vs standalone repos (monorepo recommended).
 2. Keep `Billing*` type names vs rename to `TwoKey*` with aliases.
-3. npm scope `@2key/` vs unscoped `2key_ts_sdk` string (recommend `@2key/ts-sdk` published name with doc alias `2key_ts_sdk`).
+3. npm scope `@2key/` vs unscoped `2key_ts_sdk` string (recommend `@2key/ts-sdk`).
 4. Whether M2M uses only mTLS or also opaque machine tokens for environments without mTLS.
 5. Timeline to extract billing-portal onto `2key_ts_sdk`.
+6. FRB version / generate-in-CI vs vendored Dart bindings ([design open questions](proposals/add-rust-core-sdk/design.md)).
+7. Package rename timing relative to Rust dual-path.
+8. Publish `2key_core` on crates.io vs git-only until 1.0.
 
 ---
 
 ## 16. One-page summary
 
 ```
-better-auth fork     = syncable auth engine + native plugin + low-level Dart auth client
+better-auth fork     = syncable auth engine + native plugin + low-level auth clients
 2key-billing-server  = private product (license, usage, mTLS, …)
-2key-billing-sdks    = public 2key_dart_sdk (REFERENCE) + 2key_ts_sdk + …
+2key-billing-sdks    = 2key_core (NATIVE REF) + 2key_dart_sdk (FRB) + 2key_ts_sdk (BROWSER REF) + …
 Apps                 = depend on 2key_<lang>_sdk only
 ```
 
 Rapid product change happens in the **private server**.  
 Continuous upstream sync happens in the **thin fork**.  
-Behavioral consistency happens via **`2key_dart_sdk` + OpenAPI + conformance**.
+Native consistency happens via **`2key_core` + OpenAPI + conformance**.  
+Browser consistency happens via **`2key_ts_sdk` + same OpenAPI + conformance**.
+
+**Proposal (awaiting approval):** [docs/proposals/add-rust-core-sdk/](proposals/add-rust-core-sdk/proposal.md)
